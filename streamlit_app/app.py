@@ -262,7 +262,7 @@ login_gate()
 # Permission tokens recognised by the app. A user's `permission` string in
 # user_credentials is a comma-separated list of these (or the literal 'all').
 KNOWN_TOKENS = [
-    "all", "Spools", "Project Summary", "Update Fit-Up", "Update Welding",
+    "all", "Spools", "Project Summary", "Targets", "Update Fit-Up", "Update Welding",
     "Painting Delivery", "Site Delivery", "Generate Reports", "Inventory",
     "Manpower Report",
 ]
@@ -272,13 +272,13 @@ ADMIN = "__admin__"   # page tokens that only 'all' can satisfy
 # Data-entry and admin pages are gated; the plan/report views stay open.
 PAGE_PERMS = {
     "Overview": [],
-    "Targets & plan": [],
+    "Targets & plan": ["Targets"],
     "Work order summary": [],
     "Update progress": ["Update Fit-Up", "Update Welding"],
     "Delivery": ["Painting Delivery", "Site Delivery"],
     "Spools": [],
     "Classify & export": ["Generate Reports"],
-    "Inventory": [],
+    "Inventory": ["Inventory"],
     "Manpower": ["Manpower Report"],
     "Data admin": [ADMIN],
     "Users": [ADMIN],
@@ -580,7 +580,7 @@ def _parse_dates(text: str) -> tuple[set[date], list[str]]:
 def page_targets() -> None:
     st.header("Targets & plan")
     perm = st.session_state.get("permission", "")
-    can_edit = perm == "all" or "Project Summary" in perm
+    can_edit = perm == "all" or "Targets" in perm or "Project Summary" in perm
     cfg = db.get_settings()
 
     lo_row = db.query(
@@ -624,7 +624,7 @@ def page_targets() -> None:
                 st.success("Plan saved.")
                 st.rerun()
     if not can_edit:
-        st.caption("View only — needs 'Project Summary' permission (or 'all') to change the plan.")
+        st.caption("View only — needs the 'Targets & plan' grant (or 'all') to change the plan.")
 
     rest_s = set(rest)
     hol_s, _ = _parse_dates(hol_text)
@@ -1188,12 +1188,14 @@ def page_inventory() -> None:
 
 # gated tab  ->  {checkbox label: permission token}
 GATED_TABS = {
+    "Targets & plan": {"Targets & plan": "Targets"},
     "Update progress": {"Fit-Up updates": "Update Fit-Up",
                         "Welding updates": "Update Welding"},
     "Delivery": {"Painting delivery": "Painting Delivery",
                  "Site delivery": "Site Delivery"},
     "Manpower": {"Manpower entry": "Manpower Report"},
     "Classify & export": {"Classify & export": "Generate Reports"},
+    "Inventory": {"Inventory": "Inventory"},
 }
 _ALWAYS_TABS = [p for p, t in PAGE_PERMS.items()
                 if not t and p not in ("Data admin", "Users")]
