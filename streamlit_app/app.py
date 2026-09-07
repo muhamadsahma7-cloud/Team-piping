@@ -12,8 +12,10 @@ Run:
 
 from __future__ import annotations
 
+import base64
 import math
 from datetime import date, timedelta
+from pathlib import Path
 
 import altair as alt
 import pandas as pd
@@ -21,6 +23,13 @@ import streamlit as st
 
 import db
 import reports
+
+_LOGO_PATH = Path(__file__).parent / "assets" / "naec_logo.jpg"
+try:
+    LOGO_URI = "data:image/jpeg;base64," + base64.b64encode(
+        _LOGO_PATH.read_bytes()).decode()
+except Exception:
+    LOGO_URI = ""
 
 _PCT = dict(min_value=0, max_value=100, format="%.0f%%")
 
@@ -170,18 +179,43 @@ hr { margin:1rem 0; border-color:var(--line); }
 """,
         unsafe_allow_html=True,
     )
+    if LOGO_URI:
+        st.markdown(
+            f"""
+<style>
+.stApp::before {{
+  content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
+  background:url("{LOGO_URI}") no-repeat center 44%;
+  background-size:min(44vw,500px); opacity:.05;
+}}
+[data-testid="stAppViewContainer"] .main {{ position:relative; z-index:1; }}
+</style>
+""",
+            unsafe_allow_html=True,
+        )
 
 
 # --------------------------------------------------------------- login
 def login_gate() -> None:
     if st.session_state.get("user"):
         return
-    st.markdown(BRAND_HTML, unsafe_allow_html=True)
-    st.subheader("Sign in")
-    with st.form("login"):
-        u = st.text_input("Username")
-        p = st.text_input("Password", type="password")
-        ok = st.form_submit_button("Sign in")
+    _, mid, _ = st.columns([1, 1.3, 1])
+    with mid:
+        if LOGO_URI:
+            st.markdown(
+                f"<div style='text-align:center;margin:1.2rem 0 .4rem'>"
+                f"<img src='{LOGO_URI}' style='width:230px;background:#fff;"
+                f"padding:16px 20px;border-radius:18px;"
+                f"box-shadow:0 8px 30px rgba(0,0,0,.35)'></div>",
+                unsafe_allow_html=True,
+            )
+        st.markdown(f"<div style='text-align:center'>{BRAND_HTML}</div>",
+                    unsafe_allow_html=True)
+        st.subheader("Sign in")
+        with st.form("login"):
+            u = st.text_input("Username")
+            p = st.text_input("Password", type="password")
+            ok = st.form_submit_button("Sign in", use_container_width=True)
     if ok:
         perm = db.check_login(u.strip(), p)
         if perm is None:
