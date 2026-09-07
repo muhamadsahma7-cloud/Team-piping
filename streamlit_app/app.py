@@ -82,7 +82,15 @@ def donut_block(col, label: str, done: float, total: float, color: str) -> None:
     )
     col.altair_chart(dark_alt(donut(done, total, color)), use_container_width=True)
 
-st.set_page_config(page_title="Team Piping", page_icon="🔧", layout="wide")
+st.set_page_config(page_title="Team Piping — NAEC Malaysia", page_icon="🔧",
+                   layout="wide")
+
+BRAND_HTML = (
+    "<div style='line-height:1.12;margin:.1rem 0 .35rem'>"
+    "<div style='font-size:1.7rem;font-weight:800;color:#f1f5f9'>🔧 Team Piping</div>"
+    "<div style='font-size:.72rem;font-weight:700;letter-spacing:.16em;"
+    "color:#4d8dff;margin-top:3px'>NAEC MALAYSIA SDN BHD</div></div>"
+)
 
 PAGE_ICONS = {
     "Overview": "📊", "Targets & plan": "🎯", "Work order summary": "📋",
@@ -168,7 +176,8 @@ hr { margin:1rem 0; border-color:var(--line); }
 def login_gate() -> None:
     if st.session_state.get("user"):
         return
-    st.title("Team Piping — sign in")
+    st.markdown(BRAND_HTML, unsafe_allow_html=True)
+    st.subheader("Sign in")
     with st.form("login"):
         u = st.text_input("Username")
         p = st.text_input("Password", type="password")
@@ -230,7 +239,7 @@ def can_see(page: str, perm: str) -> bool:
 
 
 with st.sidebar:
-    st.markdown("### 🔧 Team Piping")
+    st.markdown(BRAND_HTML, unsafe_allow_html=True)
     st.caption(f"Signed in as **{st.session_state['user']}**")
     if st.button("Sign out", use_container_width=True):
         st.session_state.clear()
