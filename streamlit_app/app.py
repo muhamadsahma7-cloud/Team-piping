@@ -32,8 +32,9 @@ def show_table(df: pd.DataFrame, name: str, *, progress: tuple = (),
            for c in progress if c in df.columns}
     cfg.update({c: st.column_config.NumberColumn(c.replace("_", " "), format="%.2f")
                 for c in money if c in df.columns})
+    kw = {"height": height} if height is not None else {}
     st.dataframe(styler if styler is not None else df, use_container_width=True,
-                 hide_index=True, column_config=cfg, height=height)
+                 hide_index=True, column_config=cfg, **kw)
     st.download_button("⬇ CSV", df.to_csv(index=False).encode(),
                        file_name=f"{name}.csv", mime="text/csv", key=f"dl_{name}")
 
