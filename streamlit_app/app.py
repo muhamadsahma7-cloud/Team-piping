@@ -91,12 +91,25 @@ def donut_block(col, label: str, done: float, total: float, color: str) -> None:
     )
     col.altair_chart(dark_alt(donut(done, total, color)), use_container_width=True)
 
-st.set_page_config(page_title="Team Piping — NAEC Malaysia", page_icon="🔧",
-                   layout="wide")
+st.set_page_config(
+    page_title="Team Piping — NAEC Malaysia",
+    page_icon=str(_LOGO_PATH) if _LOGO_PATH.exists() else "🛠️",
+    layout="wide",
+)
 
+# piping-routing mark: a pipe run with two elbows + flanged ends
+_PIPE_SVG = (
+    "<svg width='32' height='32' viewBox='0 0 32 32' "
+    "style='vertical-align:-7px;margin-right:7px'>"
+    "<path d='M2 9h9a4 4 0 0 1 4 4v6a4 4 0 0 0 4 4h9' fill='none' "
+    "stroke='#4d8dff' stroke-width='3.4' stroke-linecap='round'/>"
+    "<circle cx='2' cy='9' r='2.9' fill='#f59f00'/>"
+    "<circle cx='30' cy='23' r='2.9' fill='#f59f00'/></svg>"
+)
 BRAND_HTML = (
     "<div style='line-height:1.12;margin:.1rem 0 .35rem'>"
-    "<div style='font-size:1.7rem;font-weight:800;color:#f1f5f9'>🔧 Team Piping</div>"
+    f"<div style='font-size:1.7rem;font-weight:800;color:#f1f5f9'>"
+    f"{_PIPE_SVG}Team Piping</div>"
     "<div style='font-size:.72rem;font-weight:700;letter-spacing:.16em;"
     "color:#4d8dff;margin-top:3px'>NAEC MALAYSIA SDN BHD</div></div>"
 )
