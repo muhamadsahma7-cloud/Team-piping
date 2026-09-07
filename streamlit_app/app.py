@@ -118,7 +118,19 @@ def inject_css() -> None:
         """
 <style>
 :root { --accent:#4d8dff; --accent2:#22c55e; --ink:#f1f5f9; --line:#2b3a52; }
-.block-container { padding-top: 2rem; max-width: 1320px; }
+.block-container { padding-top: 2rem; max-width: 1320px; position:relative; z-index:1; }
+section[data-testid="stSidebar"] { z-index:2; }
+/* inputs — keep visible on the dark theme */
+.stTextInput input, .stNumberInput input, .stDateInput input,
+.stTextArea textarea, [data-baseweb="input"], [data-baseweb="select"] > div,
+[data-baseweb="textarea"] {
+  background:#0f1a2e !important; color:#e6edf7 !important;
+  border:1px solid #35507a !important; border-radius:8px !important;
+}
+.stTextInput input::placeholder, .stTextArea textarea::placeholder { color:#7a8db0 !important; }
+.stTextInput input:focus, .stNumberInput input:focus, .stTextArea textarea:focus {
+  border-color:var(--accent) !important;
+}
 h1 { font-weight:700; letter-spacing:-.01em; color:var(--ink); }
 h2 { margin-top:.3rem; padding-bottom:.35rem; border-bottom:2px solid var(--line);
      color:var(--ink); }
@@ -185,10 +197,9 @@ hr { margin:1rem 0; border-color:var(--line); }
 <style>
 .stApp::before {{
   content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
-  background:url("{LOGO_URI}") no-repeat center 44%;
-  background-size:min(44vw,500px); opacity:.05;
+  background:url("{LOGO_URI}") no-repeat center 45%;
+  background-size:min(42vw,460px); opacity:.04; filter:grayscale(1);
 }}
-[data-testid="stAppViewContainer"] .main {{ position:relative; z-index:1; }}
 </style>
 """,
             unsafe_allow_html=True,
