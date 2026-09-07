@@ -69,6 +69,47 @@ def donut_block(col, label: str, done: float, total: float, color: str) -> None:
 
 st.set_page_config(page_title="Team Piping", page_icon="🔧", layout="wide")
 
+PAGE_ICONS = {
+    "Overview": "📊", "Targets & plan": "🎯", "Work order summary": "📋",
+    "Update progress": "✏️", "Delivery": "🚚", "Spools": "🔩",
+    "Classify & export": "🗂️", "Inventory": "📦", "Manpower": "👷",
+    "Data admin": "🛠️", "Users": "👥",
+}
+
+
+def inject_css() -> None:
+    st.markdown(
+        """
+<style>
+:root { --accent:#2f6feb; --accent2:#12b886; --ink:#0f172a; }
+.block-container { padding-top: 2rem; max-width: 1320px; }
+h1 { font-weight:700; letter-spacing:-.01em; color:var(--ink); }
+h2 { margin-top:.3rem; padding-bottom:.35rem; border-bottom:2px solid #e6ebf2;
+     color:var(--ink); }
+h3 { color:var(--accent); font-weight:600; }
+section[data-testid="stSidebar"] { background:#eef3fb; border-right:1px solid #e2e8f0; }
+section[data-testid="stSidebar"] [role="radiogroup"] label { padding:.15rem 0; }
+div[data-testid="stMetric"] {
+  background:#fff; border:1px solid #e6ebf2; border-left:4px solid var(--accent);
+  border-radius:12px; padding:14px 16px;
+}
+div[data-testid="stMetric"] label p { color:#64748b; font-weight:500; }
+.stButton>button, .stDownloadButton>button, .stForm button {
+  border-radius:9px; font-weight:600;
+}
+div[data-testid="stDataFrame"], div[data-testid="stTable"] {
+  border:1px solid #e6ebf2; border-radius:10px;
+}
+.stTabs [data-baseweb="tab-list"] { gap:2px; }
+.stTabs [aria-selected="true"] { color:var(--accent) !important; }
+div[data-testid="stAlert"] { border-radius:10px; }
+[data-testid="stProgress"] > div > div > div { background:var(--accent2); }
+hr { margin:1rem 0; border-color:#e6ebf2; }
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
 
 # --------------------------------------------------------------- login
 def login_gate() -> None:
@@ -94,6 +135,7 @@ def login_gate() -> None:
     st.stop()
 
 
+inject_css()
 login_gate()
 
 # ---- access control -------------------------------------------------
@@ -135,13 +177,16 @@ def can_see(page: str, perm: str) -> bool:
 
 
 with st.sidebar:
-    st.write(f"Signed in as **{st.session_state['user']}**")
-    if st.button("Sign out"):
+    st.markdown("### 🔧 Team Piping")
+    st.caption(f"Signed in as **{st.session_state['user']}**")
+    if st.button("Sign out", use_container_width=True):
         st.session_state.clear()
         st.rerun()
+    st.divider()
     _perm = st.session_state.get("permission", "")
     visible = [p for p in PAGE_PERMS if can_see(p, _perm)] or ["Overview"]
-    page = st.radio("Page", visible)
+    page = st.radio("Page", visible, label_visibility="collapsed",
+                    format_func=lambda p: f"{PAGE_ICONS.get(p, '•')}  {p}")
 
 # guard against a stale / disallowed selection
 if not can_see(page, st.session_state.get("permission", "")):

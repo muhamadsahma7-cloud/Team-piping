@@ -1,12 +1,13 @@
 # App theme. Change the hex values here to rebrand.
 # Restart Streamlit after editing (theme is read at startup).
+# Keep in sync with ../.streamlit/config.toml (repo root, used by Streamlit Cloud).
 
 [theme]
 base = "light"
-primaryColor = "#1f4e79"              # corporate navy — buttons, links, active nav
-backgroundColor = "#f6f8fb"           # main page — soft cool grey
-secondaryBackgroundColor = "#ffffff"  # cards, sidebar, table header, inputs
-textColor = "#1f2933"                 # dark slate
+primaryColor = "#2f6feb"              # vivid blue — buttons, links, active nav
+backgroundColor = "#f7f9fc"           # main page — very light
+secondaryBackgroundColor = "#ffffff"  # cards, sidebar panels, inputs, table header
+textColor = "#1f2933"
 font = "sans serif"
 
 [server]
