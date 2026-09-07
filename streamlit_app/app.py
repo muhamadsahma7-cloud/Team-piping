@@ -192,6 +192,10 @@ div[data-testid="stMetric"] label p { color:#94a3b8; font-weight:500; }
 .stButton>button, .stDownloadButton>button, .stForm button {
   border-radius:9px; font-weight:600;
 }
+.stDownloadButton>button {
+  padding:.7rem 1.1rem; font-size:1rem; min-height:3rem;
+}
+.stDownloadButton>button[kind="primary"] { box-shadow:0 4px 16px rgba(77,141,255,.28); }
 div[data-testid="stDataFrame"], div[data-testid="stTable"] {
   border:1px solid var(--line); border-radius:10px;
 }
@@ -1114,43 +1118,57 @@ def _all_spools() -> pd.DataFrame:
     return db.query("SELECT * FROM spools", ttl=30)
 
 
+@st.cache_data(ttl=600, show_spinner="Classifying spools & building exports…")
+def _classify_payload():
+    """Heavy work (classify + two formatted xlsx workbooks) done once, cached.
+    Cleared by st.cache_data.clear() after any spools import/restore."""
+    df = db.query("SELECT * FROM spools", ttl=600)
+    classified = reports.classify(df)
+    preview = classified[[c for c in reports._CLASSIFIED_COLS if c in classified.columns]]
+    return (
+        reports.summarize(classified),
+        preview,
+        reports.build_classified_xlsx(df),
+        reports.build_master_xlsx(df),
+        int(len(df)),
+    )
+
+
 def page_reports() -> None:
     st.header("Classify & export")
-    st.caption("Ported from classify_spools.py and export_master.py. "
-               "Reads the live spools table.")
+    summary, preview, x_classified, x_master, nrows = _classify_payload()
 
-    df = _all_spools()
-    classified = reports.classify(df)
-    summary = reports.summarize(classified)
+    top = st.columns([4, 1])
+    top[0].caption(f"{nrows:,} spools · ported from classify_spools.py / export_master.py "
+                   "· results cached ~10 min")
+    if top[1].button("↻ Rebuild", use_container_width=True):
+        _classify_payload.clear()
+        st.rerun()
 
     st.subheader("Spool status summary")
     st.dataframe(summary, use_container_width=True, hide_index=True)
     st.bar_chart(summary.set_index("Spool Status")["Total_Spools"])
 
     ts = reports.stamp()
+    _XL = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     c1, c2 = st.columns(2)
     with c1:
         st.download_button(
-            "⬇ Classified spools (.xlsx)",
-            data=reports.build_classified_xlsx(df),
-            file_name=f"classified_spools_{ts}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "⬇  Download classified spools (.xlsx)", data=x_classified,
+            file_name=f"classified_spools_{ts}.xlsx", mime=_XL,
+            type="primary", use_container_width=True,
         )
         st.caption("Summary + All Spools + Pipe Spool Summary + one sheet per status.")
     with c2:
         st.download_button(
-            "⬇ Master export (.xlsx)",
-            data=reports.build_master_xlsx(df),
-            file_name=f"spool_tracking_{ts}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "⬇  Download master export (.xlsx)", data=x_master,
+            file_name=f"spool_tracking_{ts}.xlsx", mime=_XL,
+            type="primary", use_container_width=True,
         )
-        st.caption("Full spools table with report headers, ordered like the desktop export.")
+        st.caption("Full spools table with report headers, desktop column order.")
 
     with st.expander("Preview: classified rows"):
-        st.dataframe(
-            classified[[c for c in reports._CLASSIFIED_COLS if c in classified.columns]],
-            use_container_width=True, hide_index=True,
-        )
+        st.dataframe(preview, use_container_width=True, hide_index=True)
 
 
 def page_inventory() -> None:
