@@ -1,13 +1,14 @@
-# App theme. Change the hex values here to rebrand.
-# Restart Streamlit after editing (theme is read at startup).
+# App theme — DARK. Restart Streamlit after editing.
 # Keep in sync with ../.streamlit/config.toml (repo root, used by Streamlit Cloud).
+# To go back to light: base="light", backgroundColor="#f7f9fc",
+#   secondaryBackgroundColor="#ffffff", textColor="#1f2933"  (and swap inject_css()).
 
 [theme]
-base = "light"
-primaryColor = "#2f6feb"              # vivid blue — buttons, links, active nav
-backgroundColor = "#f7f9fc"           # main page — very light
-secondaryBackgroundColor = "#ffffff"  # cards, sidebar panels, inputs, table header
-textColor = "#1f2933"
+base = "dark"
+primaryColor = "#4d8dff"              # vivid blue accent
+backgroundColor = "#0f172a"           # slate-900 page
+secondaryBackgroundColor = "#1a2436"  # cards, sidebar, inputs, table header
+textColor = "#e2e8f0"
 font = "sans serif"
 
 [server]

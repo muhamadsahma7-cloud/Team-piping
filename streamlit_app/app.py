@@ -39,7 +39,22 @@ def show_table(df: pd.DataFrame, name: str, *, progress: tuple = (),
                        file_name=f"{name}.csv", mime="text/csv", key=f"dl_{name}")
 
 
-def donut(done: float, total: float, color: str = "#1e8449"):
+_ALT_AXIS = "#9fb0c9"
+
+
+def dark_alt(chart):
+    """Make an Altair chart legible on the dark theme (call once, at render)."""
+    return (
+        chart.configure(background="transparent")
+        .configure_view(strokeWidth=0)
+        .configure_axis(labelColor=_ALT_AXIS, titleColor=_ALT_AXIS,
+                        gridColor="#26344c", domainColor="#26344c")
+        .configure_legend(labelColor=_ALT_AXIS, titleColor=_ALT_AXIS)
+        .configure_title(color="#e2e8f0")
+    )
+
+
+def donut(done: float, total: float, color: str = "#22c55e"):
     pct = (done / total * 100) if total else 0
     src = pd.DataFrame({"cat": ["done", "remaining"],
                         "val": [done, max(total - done, 0.0)]})
@@ -48,24 +63,24 @@ def donut(done: float, total: float, color: str = "#1e8449"):
         .encode(theta=alt.Theta("val:Q", stack=True),
                 color=alt.Color("cat:N", legend=None,
                                 scale=alt.Scale(domain=["done", "remaining"],
-                                                range=[color, "#e6e6e6"])),
+                                                range=[color, "#2b3a52"])),
                 tooltip=[alt.Tooltip("cat:N", title=""),
                          alt.Tooltip("val:Q", title="dia-inch", format=",.1f")])
     )
     text = (alt.Chart(pd.DataFrame({"t": [f"{pct:.0f}%"]}))
-            .mark_text(size=22, fontWeight="bold").encode(text="t:N"))
-    return (arc + text).properties(height=180).configure_view(strokeWidth=0)
+            .mark_text(size=22, fontWeight="bold", color="#e2e8f0").encode(text="t:N"))
+    return (arc + text).properties(height=180)
 
 
 def donut_block(col, label: str, done: float, total: float, color: str) -> None:
     col.markdown(
         f"<div style='text-align:center;line-height:1.25'>"
         f"<b>{label}</b><br>"
-        f"<span style='color:#64748b;font-size:0.85em'>"
+        f"<span style='color:#94a3b8;font-size:0.85em'>"
         f"{done:,.0f} / {total:,.0f} dia-inch</span></div>",
         unsafe_allow_html=True,
     )
-    col.altair_chart(donut(done, total, color), use_container_width=True)
+    col.altair_chart(dark_alt(donut(done, total, color)), use_container_width=True)
 
 st.set_page_config(page_title="Team Piping", page_icon="🔧", layout="wide")
 
@@ -78,67 +93,71 @@ PAGE_ICONS = {
 
 
 def inject_css() -> None:
+    # Dark theme. The app's base (page bg, text, dataframe grid) comes from
+    # .streamlit/config.toml (base = "dark"); this only adds the accents,
+    # glass sidebar and card styling. Viewers can switch to light via
+    # the ⋮ menu → Settings → Theme.
     st.markdown(
         """
 <style>
-:root { --accent:#2f6feb; --accent2:#12b886; --ink:#0f172a; }
+:root { --accent:#4d8dff; --accent2:#22c55e; --ink:#f1f5f9; --line:#2b3a52; }
 .block-container { padding-top: 2rem; max-width: 1320px; }
 h1 { font-weight:700; letter-spacing:-.01em; color:var(--ink); }
-h2 { margin-top:.3rem; padding-bottom:.35rem; border-bottom:2px solid #e6ebf2;
+h2 { margin-top:.3rem; padding-bottom:.35rem; border-bottom:2px solid var(--line);
      color:var(--ink); }
 h3 { color:var(--accent); font-weight:600; }
 /* --- frosted-glass sidebar --- */
 section[data-testid="stSidebar"] {
-  background: linear-gradient(180deg,#e6edfb 0%,#eef3fb 45%,#f0edfb 100%);
-  border-right: 1px solid rgba(255,255,255,.6);
+  background: linear-gradient(180deg,#152036 0%,#111a2e 55%,#161327 100%);
+  border-right: 1px solid rgba(255,255,255,.06);
 }
 section[data-testid="stSidebar"] .stButton>button {
-  background: rgba(255,255,255,.5);
+  background: rgba(255,255,255,.06);
   -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
-  border: 1px solid rgba(255,255,255,.7);
-  box-shadow: 0 2px 12px rgba(15,23,42,.08);
-  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,.12);
+  box-shadow: 0 2px 14px rgba(0,0,0,.35);
+  border-radius: 12px; color: var(--ink);
 }
 section[data-testid="stSidebar"] .stButton>button:hover {
-  background: rgba(255,255,255,.8); border-color: var(--accent); color: var(--accent);
+  background: rgba(77,141,255,.18); border-color: var(--accent); color:#cfe0ff;
 }
 section[data-testid="stSidebar"] [role="radiogroup"] > label {
-  background: rgba(255,255,255,.42);
+  background: rgba(255,255,255,.045);
   -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
-  border: 1px solid rgba(255,255,255,.55);
-  box-shadow: 0 1px 6px rgba(15,23,42,.05);
+  border: 1px solid rgba(255,255,255,.08);
+  box-shadow: 0 1px 8px rgba(0,0,0,.3);
   border-radius: 11px;
   padding: .5rem .7rem !important;
   margin-bottom: 6px;
   transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
 }
 section[data-testid="stSidebar"] [role="radiogroup"] > label:hover {
-  background: rgba(255,255,255,.72);
+  background: rgba(255,255,255,.09);
 }
 section[data-testid="stSidebar"] [role="radiogroup"] > label:has(input:checked) {
-  background: rgba(47,111,235,.12);
-  border-color: rgba(47,111,235,.45);
-  box-shadow: 0 2px 12px rgba(47,111,235,.16);
+  background: rgba(77,141,255,.20);
+  border-color: rgba(77,141,255,.55);
+  box-shadow: 0 2px 16px rgba(77,141,255,.22);
 }
 section[data-testid="stSidebar"] [role="radiogroup"] > label > div:first-child {
   display: none;               /* hide radio dot for a clean pill */
 }
 div[data-testid="stMetric"] {
-  background:#fff; border:1px solid #e6ebf2; border-left:4px solid var(--accent);
+  background:#1a2436; border:1px solid var(--line); border-left:4px solid var(--accent);
   border-radius:12px; padding:14px 16px;
 }
-div[data-testid="stMetric"] label p { color:#64748b; font-weight:500; }
+div[data-testid="stMetric"] label p { color:#94a3b8; font-weight:500; }
 .stButton>button, .stDownloadButton>button, .stForm button {
   border-radius:9px; font-weight:600;
 }
 div[data-testid="stDataFrame"], div[data-testid="stTable"] {
-  border:1px solid #e6ebf2; border-radius:10px;
+  border:1px solid var(--line); border-radius:10px;
 }
 .stTabs [data-baseweb="tab-list"] { gap:2px; }
 .stTabs [aria-selected="true"] { color:var(--accent) !important; }
 div[data-testid="stAlert"] { border-radius:10px; }
 [data-testid="stProgress"] > div > div > div { background:var(--accent2); }
-hr { margin:1rem 0; border-color:#e6ebf2; }
+hr { margin:1rem 0; border-color:var(--line); }
 </style>
 """,
         unsafe_allow_html=True,
@@ -322,9 +341,9 @@ def page_overview() -> None:
 
     st.subheader("Progress (shop dia-inch)")
     dc = st.columns(3)
-    donut_block(dc[0], "Fit-up", fitup_done, shop_di, "#2e86c1")
-    donut_block(dc[1], "Welding", welding_done, shop_di, "#1e8449")
-    donut_block(dc[2], "Delivery", delivered_di, shop_di, "#b9770e")
+    donut_block(dc[0], "Fit-up", fitup_done, shop_di, "#5ea0ff")
+    donut_block(dc[1], "Welding", welding_done, shop_di, "#34d399")
+    donut_block(dc[2], "Delivery", delivered_di, shop_di, "#fbbf24")
     for label, val in [("Fit-up", fitup_done), ("Welding", welding_done),
                        ("Delivery", delivered_di)]:
         pct = (val / shop_di) if shop_di else 0
@@ -376,12 +395,12 @@ def page_overview() -> None:
         sc = sc.sort_values("d")
         sc["Cumulative dia-inch"] = sc.groupby("k")["v"].cumsum()
         st.altair_chart(
-            alt.Chart(sc).mark_line(point=True).encode(
+            dark_alt(alt.Chart(sc).mark_line(point=True).encode(
                 x=alt.X("d:T", title="Date"),
                 y=alt.Y("Cumulative dia-inch:Q", title="Cumulative dia-inch"),
                 color=alt.Color("k:N", title="Activity",
                                 scale=alt.Scale(domain=["Fit-up", "Welding"],
-                                                range=["#2e86c1", "#1e8449"])),
+                                                range=["#5ea0ff", "#34d399"])),
                 tooltip=[alt.Tooltip("d:T", title="date"), "k:N",
                          alt.Tooltip("Cumulative dia-inch:Q", format=",.1f")],
             ).properties(
@@ -389,7 +408,7 @@ def page_overview() -> None:
                 title=alt.TitleParams(
                     f"Cumulative fit-up vs welding — as of {asof.isoformat()}",
                     anchor="start", fontSize=14, fontWeight="bold"),
-            ),
+            )),
             use_container_width=True,
         )
 
@@ -584,7 +603,7 @@ def page_targets() -> None:
     st.subheader("Plan vs actual")
     st.dataframe(
         rep.style.map(
-            lambda v: "color:#c0392b;font-weight:bold" if v == "BEHIND" else "color:#1e8449",
+            lambda v: "color:#f87171;font-weight:bold" if v == "BEHIND" else "color:#34d399",
             subset=["Status"],
         ),
         use_container_width=True, hide_index=True,
@@ -669,7 +688,7 @@ def page_wo_summary() -> None:
     only_open = st.toggle("Hide closed work orders", value=False)
     view = wo_show[~done_mask] if only_open else wo_show
     styler = view.style.apply(
-        lambda r: (["background-color:#eafaf1"] if r["Status"] == "✅ closed"
+        lambda r: (["background-color:rgba(34,197,94,.14)"] if r["Status"] == "✅ closed"
                    else [""]) * len(r),
         axis=1,
     )

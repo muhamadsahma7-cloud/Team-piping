@@ -1,12 +1,13 @@
-# Repo-root theme, used by Streamlit Community Cloud (working dir = repo root).
-# Keep in sync with streamlit_app/.streamlit/config.toml (used for local runs).
+# Repo-root theme (DARK), used by Streamlit Community Cloud.
+# Keep in sync with streamlit_app/.streamlit/config.toml.
+# Viewers can switch to Light in the app's ⋮ menu → Settings → Theme.
 
 [theme]
-base = "light"
-primaryColor = "#2f6feb"
-backgroundColor = "#f7f9fc"
-secondaryBackgroundColor = "#ffffff"
-textColor = "#1f2933"
+base = "dark"
+primaryColor = "#4d8dff"
+backgroundColor = "#0f172a"
+secondaryBackgroundColor = "#1a2436"
+textColor = "#e2e8f0"
 font = "sans serif"
 
 [browser]
