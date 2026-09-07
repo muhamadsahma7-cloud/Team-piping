@@ -1,0 +1,22 @@
+# secrets — never commit
+**/.streamlit/secrets.toml
+supabase/.env
+.env
+
+# python
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+
+# local runtime / scratch
+streamlit_app/_run.log
+streamlit_app/_run.err
+exports/
+classified_spools/
+iso_drawings/
+
+# local databases (source of truth for the one-off migration only)
+database/*.db
+database/backups/

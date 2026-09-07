@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd \"d:/my latest software/team piping - next final v2\" && mkdir -p supabase streamlit_app/.streamlit streamlit_app/pages && python -c \" *)"
+    ]
+  }
+}
