@@ -338,8 +338,20 @@ wd AS (
     FROM spools
     WHERE shop_field='S' AND welding_date ~ '{_ISO}' AND substr(welding_date,1,10) <= :asof
     GROUP BY 1
+),
+sp AS (
+    SELECT bool_and(coalesce(welding_date ~ '{_ISO}'
+             AND substr(welding_date,1,10) <= :asof, false))              AS welded,
+           bool_or(coalesce(site_delivery_date ~ '{_ISO}'
+             AND substr(site_delivery_date,1,10) <= :asof, false))        AS delivered
+    FROM spools
+    WHERE shop_field='S'
+    GROUP BY iso_dwg_no, line_no, iso_run_no, dwg_spool_no
 )
 SELECT
+  (SELECT count(*) FROM sp)                          AS total_spools,
+  (SELECT count(*) FROM sp WHERE welded)             AS completed_spools,
+  (SELECT count(*) FROM sp WHERE delivered)          AS delivered_spools,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S')                       AS shop_di,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='F')                       AS field_di,
   (SELECT count(DISTINCT wo_no) FROM spools
@@ -440,6 +452,16 @@ def page_overview() -> None:
     r3[3].metric("Avg welding / welder", f(s["avg_welding_welder"]), border=True)
     r3[4].metric("Current progress", f"{progress:.1f}%",
                  delta=f"{progress - 100:.1f}% to target", delta_color="off", border=True)
+
+    tsp = int(s["total_spools"] or 0)
+    csp = int(s["completed_spools"] or 0)
+    dsp = int(s["delivered_spools"] or 0)
+    r4 = st.columns(3)
+    r4[0].metric("Total pipe spools", f"{tsp:,}", border=True)
+    r4[1].metric("Total completed spools", f"{csp:,}",
+                 f"{csp/tsp*100:.0f}%" if tsp else None, delta_color="off", border=True)
+    r4[2].metric("Total delivered spools", f"{dsp:,}",
+                 f"{dsp/tsp*100:.0f}%" if tsp else None, delta_color="off", border=True)
 
     st.subheader("Cumulative S-curve (shop dia-inch)")
     sc = db.query(
