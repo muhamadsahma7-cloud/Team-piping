@@ -34,11 +34,24 @@ except Exception:
 _PCT = dict(min_value=0, max_value=100, format="%.0f%%")
 
 
+def num2_cfg(df: pd.DataFrame) -> dict:
+    """column_config that renders every float column at 2 decimals."""
+    return {c: st.column_config.NumberColumn(c, format="%.2f")
+            for c in df.columns if pd.api.types.is_float_dtype(df[c])}
+
+
 def show_table(df: pd.DataFrame, name: str, *, progress: tuple = (),
-               money: tuple = (), styler=None, height: int | None = None) -> None:
-    """A dataframe with formatted / progress columns and a CSV download."""
+               money: tuple = (), styler=None, height: int | None = None,
+               dp2: bool = True) -> None:
+    """A dataframe with 2-dp numbers, optional progress columns, and a CSV download."""
     cfg = {c: st.column_config.ProgressColumn(c.replace("_", " "), **_PCT)
            for c in progress if c in df.columns}
+    if dp2:
+        for c in df.columns:
+            if c in cfg or c in money:
+                continue
+            if pd.api.types.is_float_dtype(df[c]):
+                cfg[c] = st.column_config.NumberColumn(c.replace("_", " "), format="%.2f")
     cfg.update({c: st.column_config.NumberColumn(c.replace("_", " "), format="%.2f")
                 for c in money if c in df.columns})
     kw = {"height": height} if height is not None else {}
@@ -705,6 +718,7 @@ def page_targets() -> None:
         charts[name] = (sdf, planned_per_day)
 
     rep = pd.DataFrame(rows)
+    _num = [c for c in rep.columns if pd.api.types.is_numeric_dtype(rep[c])]
     st.subheader("Plan vs actual")
     st.dataframe(
         rep.style.map(
@@ -712,6 +726,7 @@ def page_targets() -> None:
             subset=["Status"],
         ),
         use_container_width=True, hide_index=True,
+        column_config={c: st.column_config.NumberColumn(c, format="%.2f") for c in _num},
     )
     b = st.columns(2)
     for i, r in rep.iterrows():
@@ -840,7 +855,8 @@ def page_wo_summary() -> None:
     ], columns=["Description", "Value"])
     totals["Value"] = totals["Value"].astype(float).round(2)
     st.subheader("Work order summary")
-    st.dataframe(totals, use_container_width=True, hide_index=True)
+    st.dataframe(totals, use_container_width=True, hide_index=True,
+                 column_config=num2_cfg(totals))
 
     st.download_button(
         "⬇ Export to Excel",
@@ -1158,7 +1174,8 @@ def page_reports() -> None:
         st.rerun()
 
     st.subheader("Spool status summary")
-    st.dataframe(summary, use_container_width=True, hide_index=True)
+    st.dataframe(summary, use_container_width=True, hide_index=True,
+                 column_config=num2_cfg(summary))
     st.bar_chart(summary.set_index("Spool Status")["Total_Spools"])
 
     ts = reports.stamp()
@@ -1186,7 +1203,10 @@ def page_reports() -> None:
 def page_inventory() -> None:
     st.header("Inventory")
     inv = db.query("SELECT * FROM inventory ORDER BY item_code")
-    st.dataframe(inv, use_container_width=True, hide_index=True)
+    if "quantity" in inv.columns:
+        inv["quantity"] = pd.to_numeric(inv["quantity"], errors="coerce")
+    st.dataframe(inv, use_container_width=True, hide_index=True,
+                 column_config=num2_cfg(inv))
 
     st.subheader("BOM vs inventory shortage")
     short = db.query(
@@ -1213,7 +1233,11 @@ def page_inventory() -> None:
         ORDER BY shortage DESC
         """
     )
-    st.dataframe(short, use_container_width=True, hide_index=True)
+    for c in ("qty_bom", "qty_stock", "shortage"):
+        if c in short.columns:
+            short[c] = pd.to_numeric(short[c], errors="coerce")
+    st.dataframe(short, use_container_width=True, hide_index=True,
+                 column_config=num2_cfg(short))
 
 
 # gated tab  ->  {checkbox label: permission token}
