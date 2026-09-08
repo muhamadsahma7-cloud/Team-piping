@@ -130,7 +130,7 @@ BRAND_HTML = (
 PAGE_ICONS = {
     "Overview": "📊", "Targets & plan": "🎯", "Work order summary": "📋",
     "Update progress": "✏️", "Delivery": "🚚", "Spools": "🔩",
-    "Classify & export": "🗂️", "Inventory": "📦", "Manpower": "👷",
+    "Classify & export": "🗂️", "QC WCS": "🧾", "Inventory": "📦", "Manpower": "👷",
     "Data admin": "🛠️", "Users": "👥",
 }
 
@@ -281,7 +281,7 @@ login_gate()
 KNOWN_TOKENS = [
     "all", "Spools", "Project Summary", "Targets", "Update Fit-Up", "Update Welding",
     "Painting Delivery", "Site Delivery", "Generate Reports", "Inventory",
-    "Manpower Report",
+    "Manpower Report", "QC WCS",
 ]
 ADMIN = "__admin__"   # page tokens that only 'all' can satisfy
 
@@ -295,6 +295,7 @@ PAGE_PERMS = {
     "Delivery": ["Painting Delivery", "Site Delivery"],
     "Spools": [],
     "Classify & export": ["Generate Reports"],
+    "QC WCS": [],
     "Inventory": ["Inventory"],
     "Manpower": ["Manpower Report"],
     "Data admin": [ADMIN],
@@ -1221,6 +1222,117 @@ def page_reports() -> None:
         st.dataframe(preview, use_container_width=True, hide_index=True)
 
 
+_WCS_DDL = """
+CREATE TABLE IF NOT EXISTS qc_wcs_docs (
+    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    filename    text NOT NULL, mime text, size_bytes bigint, data bytea NOT NULL,
+    note text, uploaded_by text,
+    uploaded_at timestamptz NOT NULL DEFAULT now()
+)
+"""
+_WCS_MAX_MB = 25
+
+
+@st.cache_data(ttl=600, show_spinner="Fetching document…")
+def _wcs_bytes(doc_id: int) -> bytes:
+    v = db.query("SELECT data FROM qc_wcs_docs WHERE id = :i", {"i": doc_id},
+                 ttl=600).iloc[0]["data"]
+    return bytes(v) if v is not None else b""
+
+
+def page_qc_wcs() -> None:
+    st.header("QC WCS documents")
+    perm = st.session_state.get("permission", "")
+    can_upload = perm == "all" or "QC WCS" in perm
+
+    from sqlalchemy import text as _t
+    with db.engine().begin() as cx:
+        cx.execute(_t(_WCS_DDL))
+
+    if can_upload:
+        with st.form("wcs_upload", clear_on_submit=True):
+            files = st.file_uploader(
+                "Add document(s)", accept_multiple_files=True,
+                type=["pdf", "xlsx", "xls", "docx", "doc", "jpg", "jpeg", "png",
+                      "zip", "csv", "txt"],
+            )
+            note = st.text_input("Note / reference (optional)")
+            go = st.form_submit_button("⬆  Upload", type="primary",
+                                       use_container_width=True)
+        if go:
+            if not files:
+                st.warning("Choose at least one file.")
+            else:
+                ok = 0
+                for f in files:
+                    b = f.getvalue()
+                    if len(b) > _WCS_MAX_MB * 1024 * 1024:
+                        st.error(f"{f.name}: {len(b)/1e6:.1f} MB exceeds the "
+                                 f"{_WCS_MAX_MB} MB limit — skipped.")
+                        continue
+                    db.execute(
+                        """INSERT INTO qc_wcs_docs
+                             (filename, mime, size_bytes, data, note, uploaded_by)
+                           VALUES (:fn, :mt, :sz, :dt, :nt, :ub)""",
+                        {"fn": f.name, "mt": f.type, "sz": len(b), "dt": b,
+                         "nt": note.strip() or None, "ub": st.session_state["user"]},
+                    )
+                    ok += 1
+                if ok:
+                    st.cache_data.clear()
+                    stamp = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
+                    st.success(f"Uploaded {ok} file(s) — time-stamped {stamp}.")
+                    st.rerun()
+    else:
+        st.caption("Download only — needs the **QC WCS uploads** grant to add documents.")
+
+    meta = db.query(
+        """SELECT id, filename, coalesce(note,'') AS note,
+                  coalesce(uploaded_by,'') AS uploaded_by,
+                  to_char(uploaded_at AT TIME ZONE 'Asia/Kuala_Lumpur',
+                          'YYYY-MM-DD HH24:MI') AS uploaded_at,
+                  size_bytes
+           FROM qc_wcs_docs ORDER BY uploaded_at DESC, id DESC""",
+        ttl=0,
+    )
+    st.subheader(f"Documents ({len(meta)})")
+    if meta.empty:
+        st.info("No documents uploaded yet.")
+        return
+
+    q = st.text_input("Filter by file name")
+    view = meta[meta["filename"].str.contains(q.strip(), case=False, na=False)] if q.strip() else meta
+
+    disp = view.assign(size=(view["size_bytes"] / 1024).round(0).astype("Int64").astype(str) + " KB")
+    st.dataframe(
+        disp[["filename", "note", "uploaded_by", "uploaded_at", "size"]],
+        use_container_width=True, hide_index=True,
+        column_config={"uploaded_at": st.column_config.TextColumn("uploaded (date & time)")},
+    )
+
+    st.subheader("Download")
+    if view.empty:
+        st.caption("No match.")
+        return
+    sel = st.selectbox(
+        "Document", view["id"].tolist(),
+        format_func=lambda i: view.loc[view["id"] == i, "filename"].iloc[0],
+    )
+    row = view[view["id"] == sel].iloc[0]
+    st.download_button(
+        f"⬇  Download  {row['filename']}", data=_wcs_bytes(int(sel)),
+        file_name=row["filename"], mime="application/octet-stream",
+        type="primary", use_container_width=True,
+    )
+    st.caption(f"Uploaded by **{row['uploaded_by'] or '—'}** on **{row['uploaded_at']}** · "
+               f"{int(row['size_bytes'] / 1024):,} KB")
+    if can_upload and st.button(f"🗑  Delete  {row['filename']}"):
+        db.execute("DELETE FROM qc_wcs_docs WHERE id = :i", {"i": int(sel)})
+        st.cache_data.clear()
+        st.success(f"Deleted {row['filename']}.")
+        st.rerun()
+
+
 def page_inventory() -> None:
     st.header("Inventory")
     inv = db.query("SELECT * FROM inventory ORDER BY item_code")
@@ -1270,6 +1382,7 @@ GATED_TABS = {
                  "Site delivery": "Site Delivery"},
     "Manpower": {"Manpower entry": "Manpower Report"},
     "Classify & export": {"Classify & export": "Generate Reports"},
+    "QC WCS": {"QC WCS uploads": "QC WCS"},
     "Inventory": {"Inventory": "Inventory"},
 }
 _ALWAYS_TABS = [p for p, t in PAGE_PERMS.items()
@@ -1528,6 +1641,7 @@ def page_manpower() -> None:
     "Delivery": page_delivery,
     "Spools": page_spools,
     "Classify & export": page_reports,
+    "QC WCS": page_qc_wcs,
     "Inventory": page_inventory,
     "Manpower": page_manpower,
     "Data admin": page_admin,

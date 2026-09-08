@@ -235,6 +235,21 @@ create table if not exists public.project_settings (
 );
 
 -- =====================================================================
+-- qc_wcs_docs  (QC "WCS" document store — files held as bytea)
+-- =====================================================================
+create table if not exists public.qc_wcs_docs (
+    id           bigint generated always as identity primary key,
+    filename     text not null,
+    mime         text,
+    size_bytes   bigint,
+    data         bytea not null,
+    note         text,
+    uploaded_by  text,
+    uploaded_at  timestamptz not null default now()
+);
+create index if not exists idx_qc_wcs_uploaded_at on public.qc_wcs_docs (uploaded_at desc);
+
+-- =====================================================================
 -- Row Level Security
 -- RLS is ON for every table and NO anon/authenticated policies are
 -- created. That means the public `anon` and `authenticated` API keys
@@ -254,6 +269,7 @@ alter table public.user_credentials  enable row level security;
 alter table public.user_log          enable row level security;
 alter table public.user_sessions     enable row level security;
 alter table public.project_settings  enable row level security;
+alter table public.qc_wcs_docs        enable row level security;
 
 -- =====================================================================
 -- done
