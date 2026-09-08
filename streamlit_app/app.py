@@ -248,18 +248,23 @@ hr { margin:1rem 0; border-color:var(--line); }
 def login_gate() -> None:
     if st.session_state.get("user"):
         return
+    _img = (f"<img src='{LOGO_URI}' alt='NAEC Malaysia' style='display:block;"
+            f"width:230px;margin:0 auto 14px;background:#fff;padding:16px 20px;"
+            f"border-radius:18px;box-shadow:0 8px 30px rgba(0,0,0,.35)'>"
+            if LOGO_URI else "")
     _, mid, _ = st.columns([1, 1.3, 1])
     with mid:
-        if LOGO_URI:
-            st.markdown(
-                f"<div style='text-align:center;margin:1.2rem 0 .4rem'>"
-                f"<img src='{LOGO_URI}' style='width:230px;background:#fff;"
-                f"padding:16px 20px;border-radius:18px;"
-                f"box-shadow:0 8px 30px rgba(0,0,0,.35)'></div>",
-                unsafe_allow_html=True,
-            )
-        st.markdown(f"<div style='text-align:center'>{BRAND_HTML}</div>",
-                    unsafe_allow_html=True)
+        st.markdown(
+            "<style>.stApp::before,.stApp::after{content:none!important;"
+            "background:none!important}</style>"
+            "<div style='text-align:center'>"
+            f"{_img}"
+            "<div style='font-size:1.7rem;font-weight:800;color:#f1f5f9;"
+            "letter-spacing:.04em'>TEAM PIPING</div>"
+            "<div style='font-size:.72rem;font-weight:700;letter-spacing:.16em;"
+            "color:#4d8dff;margin-top:3px'>NAEC MALAYSIA SDN BHD</div></div>",
+            unsafe_allow_html=True,
+        )
         st.subheader("Sign in")
         with st.form("login"):
             u = st.text_input("Username")
