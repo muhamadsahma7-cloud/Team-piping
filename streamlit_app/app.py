@@ -347,7 +347,67 @@ def welcome_splash() -> None:
     )
 
 
+def logout_splash() -> None:
+    """One-shot 'weld cools / session closed' flourish after sign-out."""
+    if not st.session_state.pop("just_logged_out", False):
+        return
+    st.markdown(
+        """
+<div class="tp-logout">
+  <svg viewBox="0 0 220 220" width="150" height="150" aria-hidden="true">
+    <defs>
+      <linearGradient id="loHeat" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#ff8a1f"/><stop offset=".55" stop-color="#ff5a12"/>
+        <stop offset="1" stop-color="#7a3d18"/>
+      </linearGradient>
+    </defs>
+    <circle cx="110" cy="110" r="80" fill="none" stroke="#2a323d" stroke-width="10"/>
+    <circle class="lo-bead" cx="110" cy="110" r="80" fill="none"
+            stroke="url(#loHeat)" stroke-width="10" stroke-linecap="round"
+            pathLength="100" stroke-dasharray="100" stroke-dashoffset="0"
+            transform="rotate(-90 110 110)"/>
+    <line class="lo-snap" x1="34" y1="110" x2="186" y2="110"
+          stroke="#00e5ff" stroke-width="3" stroke-linecap="round"/>
+    <circle class="lo-core" cx="110" cy="110" r="5" fill="#4d8dff"/>
+  </svg>
+  <div class="lo-hi">Signed out</div>
+  <div class="lo-sub">Session closed &nbsp;·&nbsp; see you on the next joint</div>
+</div>
+<style>
+.tp-logout{position:fixed;inset:0;z-index:2147483000;pointer-events:none;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
+  background:radial-gradient(1200px 720px at 50% 42%,#131c2c 0%,#0b1220 72%);
+  animation:lo-out .6s ease 1.75s forwards;font-family:var(--f-body,system-ui,sans-serif)}
+@keyframes lo-out{to{opacity:0;visibility:hidden}}
+.lo-bead{animation:lo-cool 1s ease-in .1s forwards;
+  filter:drop-shadow(0 0 6px #ff8a1f88)}
+@keyframes lo-cool{to{stroke-dashoffset:100;opacity:.12;filter:drop-shadow(0 0 0 #0000)}}
+.lo-snap{transform-box:fill-box;transform-origin:center;opacity:0;
+  animation:lo-zap .4s ease-out .15s forwards}
+@keyframes lo-zap{0%{opacity:1;transform:scaleX(1)}100%{opacity:0;transform:scaleX(0)}}
+.lo-core{transform-box:fill-box;transform-origin:center;
+  filter:drop-shadow(0 0 12px #4d8dff);animation:lo-die .45s ease-in .6s forwards}
+@keyframes lo-die{0%{transform:scale(1);opacity:1}100%{transform:scale(0);opacity:0}}
+.lo-hi{font-size:2.2rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase;
+  color:#e8edf3;opacity:0;transform:translateY(12px);
+  animation:lo-rise .5s ease-out .85s forwards}
+.lo-sub{font-family:var(--f-mono,ui-monospace,monospace);font-size:.72rem;
+  letter-spacing:.2em;text-transform:uppercase;color:#8aa0bd;opacity:0;
+  animation:lo-rise .5s ease-out 1.05s forwards}
+@keyframes lo-rise{to{opacity:1;transform:translateY(0)}}
+@media (prefers-reduced-motion:reduce){
+  .tp-logout{animation:lo-out .35s ease .8s forwards}
+  .tp-logout *{animation:none!important}
+  .lo-bead{stroke-dashoffset:100;opacity:.12}.lo-snap,.lo-core{opacity:0}
+  .lo-hi,.lo-sub{opacity:1;transform:none}}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
+
 inject_css()
+logout_splash()
 login_gate()
 welcome_splash()
 
@@ -396,6 +456,7 @@ with st.sidebar:
     st.caption(f"Signed in as **{st.session_state['user']}**")
     if st.button("Sign out", use_container_width=True):
         st.session_state.clear()
+        st.session_state["just_logged_out"] = True
         st.rerun()
     st.divider()
     _perm = st.session_state.get("permission", "")
