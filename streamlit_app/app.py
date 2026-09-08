@@ -725,20 +725,23 @@ def page_overview() -> None:
         for cc in ("joints", "dia_inch", "fitup_di", "welding_di"):
             d[cc] = d[cc].astype(float)
         di = d["dia_inch"].where(d["dia_inch"] > 0)
+        d["fitup_bal"] = (d["dia_inch"] - d["fitup_di"]).round(2)
+        d["welding_bal"] = (d["dia_inch"] - d["welding_di"]).round(2)
         d["fitup_%"] = (d["fitup_di"] / di * 100).round(1).fillna(0)
         d["welding_%"] = (d["welding_di"] / di * 100).round(1).fillna(0)
-        return d
+        return d[[dim, "joints", "dia_inch",
+                  "fitup_di", "fitup_bal", "fitup_%",
+                  "welding_di", "welding_bal", "welding_%"]]
 
+    _mny = ("dia_inch", "fitup_di", "fitup_bal", "welding_di", "welding_bal")
     st.subheader("Breakdown")
     t1, t2 = st.tabs(["By batch no", "By area"])
     with t1:
         show_table(breakdown("batch_no"), "progress_by_batch",
-                   progress=("fitup_%", "welding_%"),
-                   money=("dia_inch", "fitup_di", "welding_di"))
+                   progress=("fitup_%", "welding_%"), money=_mny)
     with t2:
         show_table(breakdown("area"), "progress_by_area",
-                   progress=("fitup_%", "welding_%"),
-                   money=("dia_inch", "fitup_di", "welding_di"))
+                   progress=("fitup_%", "welding_%"), money=_mny)
 
 
 _WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
