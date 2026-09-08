@@ -128,12 +128,13 @@ BRAND_HTML = (
     "color:#4d8dff;margin-top:3px'>NAEC MALAYSIA SDN BHD</div></div>"
 )
 
-# animated "pipe spool welding" scene for the login screen — a welder
-# kneeling at the pipe joint, laying a weld bead with arc + sparks.
+# animated "pipe spool welding" scene for the login screen:
+# welder walks in -> flips helmet / raises stinger -> welds a small
+# 45deg (6G) pipe joint with arc, bead and sparks. ~11s loop.
 LOGIN_ANIM = """
 <div class="weld-hero">
-<svg viewBox="0 0 560 190" xmlns="http://www.w3.org/2000/svg" role="img"
-     aria-label="Welder welding a pipe spool joint">
+<svg viewBox="0 0 560 210" xmlns="http://www.w3.org/2000/svg" role="img"
+     aria-label="Welder walking to a pipe joint and welding in the 6G position">
   <defs>
     <linearGradient id="pipe" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#33506f"/><stop offset=".16" stop-color="#8fb3d6"/>
@@ -147,81 +148,109 @@ LOGIN_ANIM = """
     </radialGradient>
   </defs>
 
-  <!-- pipes -->
-  <rect x="30"  y="60" width="230" height="50" rx="7" fill="url(#pipe)"/>
-  <rect x="300" y="60" width="230" height="50" rx="7" fill="url(#pipe)"/>
-  <rect x="22"  y="52" width="13" height="66" rx="3" fill="#4d8dff"/>
-  <rect x="525" y="52" width="13" height="66" rx="3" fill="#4d8dff"/>
-  <line x1="30" y1="150" x2="530" y2="150" stroke="#2b3a52" stroke-width="2"/>
+  <line x1="20" y1="188" x2="540" y2="188" stroke="#2b3a52" stroke-width="2"/>
 
-  <!-- welder, kneeling on the near side, reaching up to the joint -->
+  <!-- small pipe spool joint, fixed at 45deg (6G) -->
+  <g transform="rotate(-45 300 108)">
+    <rect x="178" y="94" width="122" height="28" rx="6" fill="url(#pipe)"/>
+    <rect x="300" y="94" width="122" height="28" rx="6" fill="url(#pipe)"/>
+    <rect x="172" y="88" width="9" height="40" rx="3" fill="#4d8dff"/>
+    <rect x="421" y="88" width="9" height="40" rx="3" fill="#4d8dff"/>
+  </g>
+
+  <!-- welder -->
   <g class="welder" fill="#222b39">
-    <ellipse cx="215" cy="150" rx="70" ry="7" fill="#000" opacity=".25"/>
-    <!-- back leg folded, front knee up -->
-    <path d="M196,120 L172,150 L188,150 L206,126 Z"/>
-    <path d="M200,120 L214,150 L232,150 L224,124 Z"/>
-    <!-- torso leaning toward joint -->
-    <path d="M198,122 Q206,96 232,78" stroke="#2b3a52" stroke-width="22"
+    <ellipse cx="262" cy="188" rx="44" ry="6" fill="#000" opacity=".25"/>
+    <line class="legB" x1="258" y1="150" x2="248" y2="186" stroke="#2b3a52"
+          stroke-width="10" stroke-linecap="round"/>
+    <line class="legF" x1="262" y1="150" x2="276" y2="186" stroke="#2b3a52"
+          stroke-width="10" stroke-linecap="round"/>
+    <path d="M258,150 Q266,120 280,98" stroke="#2b3a52" stroke-width="20"
           stroke-linecap="round" fill="none"/>
-    <!-- helmet + head -->
-    <circle cx="238" cy="70" r="16" fill="#1b2431"/>
-    <rect x="230" y="60" width="24" height="15" rx="3" fill="#0e141d"/>
-    <rect class="visor" x="232" y="64" width="20" height="4" rx="2" fill="#7fe3ff"/>
-    <!-- bracing back arm to knee -->
-    <path d="M226,84 Q210,100 214,120" stroke="#2b3a52" stroke-width="9"
+    <path d="M278,100 Q262,120 258,150" stroke="#2b3a52" stroke-width="8"
           stroke-linecap="round" fill="none"/>
-    <!-- welding arm + stinger, weaves while welding -->
+    <circle cx="284" cy="90" r="14" fill="#1b2431"/>
+    <rect class="flip" x="272" y="76" width="26" height="16" rx="3" fill="#0e141d"/>
+    <rect class="visor" x="274" y="80" width="22" height="3" rx="2" fill="#7fe3ff"/>
     <g class="warm">
-      <path d="M232,82 Q252,84 268,90" stroke="#2b3a52" stroke-width="10"
-            stroke-linecap="round" fill="none"/>
-      <rect x="264" y="84" width="12" height="12" rx="2" fill="#0e141d"/>
-      <line x1="274" y1="90" x2="286" y2="86" stroke="#c9ddef" stroke-width="3"
-            stroke-linecap="round"/>
+      <g class="weave">
+        <path d="M280,98 Q292,102 300,108" stroke="#2b3a52" stroke-width="9"
+              stroke-linecap="round" fill="none"/>
+        <rect x="296" y="102" width="11" height="11" rx="2" fill="#0e141d"/>
+        <line x1="304" y1="108" x2="300" y2="108" stroke="#c9ddef" stroke-width="3"
+              stroke-linecap="round"/>
+      </g>
     </g>
   </g>
 
-  <!-- weld bead being laid around the joint -->
-  <ellipse class="bead" cx="286" cy="85" rx="9" ry="25" fill="none"
-           stroke="#ffb057" stroke-width="7" stroke-linecap="round"/>
-  <circle class="arc" cx="286" cy="85" r="24" fill="url(#arc)"/>
-  <g fill="#ffc078">
-    <circle class="sp a" cx="286" cy="85" r="2.4"/>
-    <circle class="sp b" cx="286" cy="85" r="1.9"/>
-    <circle class="sp c" cx="286" cy="85" r="2.1"/>
-    <circle class="sp d" cx="286" cy="85" r="1.6"/>
-    <circle class="sp e" cx="286" cy="85" r="2.3"/>
-    <circle class="sp f" cx="286" cy="85" r="1.7"/>
+  <!-- welding effects (hidden until the weld phase) -->
+  <g class="fx">
+    <g transform="rotate(-45 300 108)">
+      <ellipse class="bead" cx="300" cy="108" rx="7" ry="15" fill="none"
+               stroke="#ffb057" stroke-width="6" stroke-linecap="round"/>
+    </g>
+    <circle class="arc" cx="300" cy="108" r="20" fill="url(#arc)"/>
+    <g fill="#ffc078">
+      <circle class="sp a" cx="300" cy="108" r="2.3"/>
+      <circle class="sp b" cx="300" cy="108" r="1.8"/>
+      <circle class="sp c" cx="300" cy="108" r="2.0"/>
+      <circle class="sp d" cx="300" cy="108" r="1.6"/>
+      <circle class="sp e" cx="300" cy="108" r="2.2"/>
+      <circle class="sp f" cx="300" cy="108" r="1.7"/>
+    </g>
   </g>
 </svg>
 </div>
 <style>
 .weld-hero{display:flex;justify-content:center;margin:.3rem 0 1rem}
-.weld-hero svg{width:min(520px,92vw)}
+.weld-hero svg{width:min(500px,92vw)}
+.weld-hero .welder{animation:wh-walk 11s ease-in-out infinite}
+@keyframes wh-walk{0%{transform:translateX(-215px)}24%{transform:translateX(0)}
+  100%{transform:translateX(0)}}
+.weld-hero .legF,.weld-hero .legB{transform-box:fill-box;transform-origin:50% 6%}
+.weld-hero .legF{animation:wh-stepF 11s linear infinite}
+.weld-hero .legB{animation:wh-stepB 11s linear infinite}
+@keyframes wh-stepF{0%{transform:rotate(0)}3%{transform:rotate(24deg)}
+  7%{transform:rotate(-18deg)}11%{transform:rotate(24deg)}15%{transform:rotate(-18deg)}
+  19%{transform:rotate(20deg)}24%{transform:rotate(0)}100%{transform:rotate(0)}}
+@keyframes wh-stepB{0%{transform:rotate(0)}3%{transform:rotate(-18deg)}
+  7%{transform:rotate(24deg)}11%{transform:rotate(-18deg)}15%{transform:rotate(24deg)}
+  19%{transform:rotate(-16deg)}24%{transform:rotate(0)}100%{transform:rotate(0)}}
+.weld-hero .warm{transform-box:fill-box;transform-origin:0% 15%;
+  animation:wh-prep 11s ease-in-out infinite}
+@keyframes wh-prep{0%,30%{transform:rotate(42deg)}40%{transform:rotate(-2deg)}
+  100%{transform:rotate(-2deg)}}
+.weld-hero .weave{transform-box:fill-box;transform-origin:0% 50%;
+  animation:wh-weave .7s ease-in-out 4.5s infinite}
+@keyframes wh-weave{0%,100%{transform:rotate(-3deg)}50%{transform:rotate(3deg)}}
+.weld-hero .flip{transform-box:fill-box;transform-origin:50% 0%;
+  animation:wh-flip 11s ease-in-out infinite}
+@keyframes wh-flip{0%,30%{transform:rotate(-122deg)}39%{transform:rotate(0)}
+  100%{transform:rotate(0)}}
+.weld-hero .fx{opacity:0;animation:wh-fx 11s linear infinite}
+@keyframes wh-fx{0%,39%{opacity:0}41%{opacity:1}96%{opacity:1}100%{opacity:0}}
 .weld-hero .arc,.weld-hero .sp,.weld-hero .visor{transform-box:fill-box;transform-origin:center}
 .weld-hero .arc{animation:wh-flick .11s steps(2,end) infinite}
-@keyframes wh-flick{from{opacity:.5;transform:scale(.82)}to{opacity:1;transform:scale(1.14)}}
-.weld-hero .visor{animation:wh-vis .13s steps(2,end) infinite}
+@keyframes wh-flick{from{opacity:.5;transform:scale(.82)}to{opacity:1;transform:scale(1.16)}}
+.weld-hero .visor{opacity:0;animation:wh-vison 11s linear infinite,
+  wh-vis .13s steps(2,end) 4.6s infinite alternate}
+@keyframes wh-vison{0%,39%{opacity:0}41%{opacity:.9}100%{opacity:.9}}
 @keyframes wh-vis{from{opacity:.35}to{opacity:1}}
-.weld-hero .warm{transform-box:fill-box;transform-origin:232px 82px;
-  animation:wh-weave .8s ease-in-out infinite}
-@keyframes wh-weave{0%,100%{transform:rotate(-2deg)}50%{transform:rotate(2.5deg)}}
-.weld-hero .welder{animation:wh-bob 3.6s ease-in-out infinite}
-@keyframes wh-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(2px)}}
-.weld-hero .bead{stroke-dasharray:168;stroke-dashoffset:168;
-  animation:wh-lay 3.6s ease-in-out infinite}
-@keyframes wh-lay{0%{stroke-dashoffset:168;opacity:1}
-  55%{stroke-dashoffset:0;opacity:1}82%{stroke-dashoffset:0;opacity:1}
-  100%{stroke-dashoffset:0;opacity:.12}}
+.weld-hero .bead{stroke-dasharray:80;stroke-dashoffset:80;
+  animation:wh-lay 11s ease-in-out infinite}
+@keyframes wh-lay{0%,40%{stroke-dashoffset:80}88%{stroke-dashoffset:0}
+  100%{stroke-dashoffset:0}}
 .weld-hero .sp{opacity:0;animation:wh-fly .8s ease-out infinite}
 @keyframes wh-fly{0%{opacity:1;transform:translate(0,0) scale(1)}
   100%{opacity:0;transform:translate(var(--dx),var(--dy)) scale(.15)}}
-.weld-hero .a{--dx:-30px;--dy:-22px;animation-delay:0s}
-.weld-hero .b{--dx:26px;--dy:-26px;animation-delay:.13s}
-.weld-hero .c{--dx:-16px;--dy:16px;animation-delay:.26s}
-.weld-hero .d{--dx:20px;--dy:20px;animation-delay:.39s}
-.weld-hero .e{--dx:-34px;--dy:4px;animation-delay:.52s}
-.weld-hero .f{--dx:32px;--dy:2px;animation-delay:.66s}
-@media (prefers-reduced-motion:reduce){.weld-hero *{animation:none!important}}
+.weld-hero .a{--dx:-28px;--dy:-22px;animation-delay:0s}
+.weld-hero .b{--dx:24px;--dy:-26px;animation-delay:.13s}
+.weld-hero .c{--dx:-15px;--dy:16px;animation-delay:.26s}
+.weld-hero .d{--dx:19px;--dy:20px;animation-delay:.39s}
+.weld-hero .e{--dx:-32px;--dy:3px;animation-delay:.52s}
+.weld-hero .f{--dx:30px;--dy:2px;animation-delay:.66s}
+@media (prefers-reduced-motion:reduce){.weld-hero *{animation:none!important}
+  .weld-hero .fx,.weld-hero .visor{opacity:1}.weld-hero .flip{transform:rotate(0)}}
 </style>
 """
 
