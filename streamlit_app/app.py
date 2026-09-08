@@ -128,6 +128,70 @@ BRAND_HTML = (
     "color:#4d8dff;margin-top:3px'>NAEC MALAYSIA SDN BHD</div></div>"
 )
 
+# animated "pipe spool welding" scene for the login screen
+LOGIN_ANIM = """
+<div class="weld-hero">
+<svg viewBox="0 0 560 180" xmlns="http://www.w3.org/2000/svg" role="img"
+     aria-label="Pipe spool welding animation">
+  <defs>
+    <linearGradient id="pipe" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#33506f"/><stop offset=".16" stop-color="#8fb3d6"/>
+      <stop offset=".5" stop-color="#d3e3f2"/><stop offset=".84" stop-color="#6f97bd"/>
+      <stop offset="1" stop-color="#28405a"/>
+    </linearGradient>
+    <radialGradient id="arc" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#ffffff"/><stop offset=".28" stop-color="#ffe0a3"/>
+      <stop offset=".62" stop-color="#ff8a1f"/>
+      <stop offset="1" stop-color="rgba(255,138,31,0)"/>
+    </radialGradient>
+  </defs>
+  <rect x="30"  y="66" width="230" height="50" rx="7" fill="url(#pipe)"/>
+  <rect x="300" y="66" width="230" height="50" rx="7" fill="url(#pipe)"/>
+  <rect x="22"  y="58" width="13" height="66" rx="3" fill="#4d8dff"/>
+  <rect x="525" y="58" width="13" height="66" rx="3" fill="#4d8dff"/>
+  <ellipse class="bead" cx="280" cy="91" rx="10" ry="26" fill="none"
+           stroke="#ffb057" stroke-width="7" stroke-linecap="round"/>
+  <circle class="arc" cx="280" cy="91" r="27" fill="url(#arc)"/>
+  <g class="torch">
+    <rect x="270" y="4" width="20" height="52" rx="4" fill="#1f2933"/>
+    <rect x="276" y="52" width="8" height="16" fill="#c9ddef"/>
+  </g>
+  <g fill="#ffc078">
+    <circle class="sp a" cx="280" cy="91" r="2.4"/>
+    <circle class="sp b" cx="280" cy="91" r="1.9"/>
+    <circle class="sp c" cx="280" cy="91" r="2.1"/>
+    <circle class="sp d" cx="280" cy="91" r="1.6"/>
+    <circle class="sp e" cx="280" cy="91" r="2.3"/>
+    <circle class="sp f" cx="280" cy="91" r="1.7"/>
+  </g>
+</svg>
+</div>
+<style>
+.weld-hero{display:flex;justify-content:center;margin:.3rem 0 1rem}
+.weld-hero svg{width:min(520px,92vw)}
+.weld-hero .arc,.weld-hero .sp{transform-box:fill-box;transform-origin:center}
+.weld-hero .arc{animation:wh-flick .11s steps(2,end) infinite}
+@keyframes wh-flick{from{opacity:.5;transform:scale(.82)}to{opacity:1;transform:scale(1.14)}}
+.weld-hero .bead{stroke-dasharray:172;stroke-dashoffset:172;
+  animation:wh-lay 3.6s ease-in-out infinite}
+@keyframes wh-lay{0%{stroke-dashoffset:172;opacity:1}
+  55%{stroke-dashoffset:0;opacity:1}82%{stroke-dashoffset:0;opacity:1}
+  100%{stroke-dashoffset:0;opacity:.12}}
+.weld-hero .torch{animation:wh-bob 3.6s ease-in-out infinite}
+@keyframes wh-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(4px)}}
+.weld-hero .sp{opacity:0;animation:wh-fly .8s ease-out infinite}
+@keyframes wh-fly{0%{opacity:1;transform:translate(0,0) scale(1)}
+  100%{opacity:0;transform:translate(var(--dx),var(--dy)) scale(.15)}}
+.weld-hero .a{--dx:-30px;--dy:-22px;animation-delay:0s}
+.weld-hero .b{--dx:26px;--dy:-26px;animation-delay:.13s}
+.weld-hero .c{--dx:-16px;--dy:16px;animation-delay:.26s}
+.weld-hero .d{--dx:20px;--dy:20px;animation-delay:.39s}
+.weld-hero .e{--dx:-34px;--dy:4px;animation-delay:.52s}
+.weld-hero .f{--dx:32px;--dy:0px;animation-delay:.66s}
+@media (prefers-reduced-motion:reduce){.weld-hero *{animation:none!important}}
+</style>
+"""
+
 PAGE_ICONS = {
     "Overview": "📊", "Targets & plan": "🎯", "Work order summary": "📋",
     "Update progress": "✏️", "Delivery": "🚚", "Spools": "🔩",
@@ -241,6 +305,7 @@ hr { margin:1rem 0; border-color:var(--line); }
 def login_gate() -> None:
     if st.session_state.get("user"):
         return
+    st.markdown(LOGIN_ANIM, unsafe_allow_html=True)
     _, mid, _ = st.columns([1, 1.3, 1])
     with mid:
         if LOGO_URI:
