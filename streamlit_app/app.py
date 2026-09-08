@@ -16,8 +16,11 @@ import base64
 import html
 import math
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+MYT = ZoneInfo("Asia/Kuala_Lumpur")
 
 import altair as alt
 import pandas as pd
@@ -451,6 +454,19 @@ def can_see(page: str, perm: str) -> bool:
     return any(t in perm for t in toks)
 
 
+@st.fragment(run_every="1s")
+def sidebar_clock() -> None:
+    now = datetime.now(MYT)
+    st.markdown(
+        "<div style='font-family:ui-monospace,SFMono-Regular,Menlo,monospace;"
+        "letter-spacing:.06em;color:#8aa0bd;line-height:1.55;padding:2px 0 4px'>"
+        f"{now:%A, %d %b %Y}<br>"
+        f"<span style='font-size:18px;font-weight:700;color:#4d8dff'>{now:%H:%M:%S}</span>"
+        " <span style='font-size:11px;color:#6b7a90'>MYT</span></div>",
+        unsafe_allow_html=True,
+    )
+
+
 with st.sidebar:
     st.markdown(BRAND_HTML, unsafe_allow_html=True)
     st.caption(f"Signed in as **{st.session_state['user']}**")
@@ -458,6 +474,7 @@ with st.sidebar:
         st.session_state.clear()
         st.session_state["just_logged_out"] = True
         st.rerun()
+    sidebar_clock()
     st.divider()
     _perm = st.session_state.get("permission", "")
     visible = [p for p in PAGE_PERMS if can_see(p, _perm)] or ["Overview"]
