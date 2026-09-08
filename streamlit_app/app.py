@@ -743,10 +743,16 @@ def page_targets() -> None:
         use_container_width=True, hide_index=True,
         column_config={c: st.column_config.NumberColumn(c, format="%.2f") for c in _num},
     )
-    b = st.columns(2)
+    planned_today = float(rep["Planned to date"].iloc[0])   # same for both disciplines
+    st.caption(f"Planned qty as of today ({today.isoformat()}) = "
+               f"Target/day × elapsed working days = "
+               f"{planned_per_day:,.2f} × {elapsed_wd} = **{planned_today:,.2f}** dia-inch")
+    b = st.columns(3)
+    b[0].metric("Planned qty as of today (dia-inch)", f"{planned_today:,.2f}", border=True)
     for i, r in rep.iterrows():
-        b[i].metric(f"{r['Discipline']} delay qty (dia-inch)", f"{r['Delay qty']:,.2f}",
-                    r["Status"], delta_color="inverse")
+        b[i + 1].metric(f"{r['Discipline']} delay qty (dia-inch)",
+                        f"{r['Delay qty']:,.2f}", r["Status"],
+                        delta_color="inverse", border=True)
 
     end = max(target_date, today)
     idx = pd.date_range(plan_start, end, freq="D")
