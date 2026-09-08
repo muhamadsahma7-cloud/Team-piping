@@ -1422,18 +1422,25 @@ def page_users() -> None:
     st.dataframe(disp[["username", "password", "access", "permission"]],
                  use_container_width=True, hide_index=True)
 
-    st.subheader("Add / update a user")
+    st.subheader("Add / edit a user's access")
     pick = st.selectbox("User", ["＋ new user"] + list(users["username"]))
     editing = pick != "＋ new user"
     row = users[users["username"] == pick].iloc[0] if editing else None
     cur_perm = row["permission"] if editing else ""
+    if editing:
+        st.info(f"**{pick}** — current access: **{_perm_to_areas(cur_perm)}**  "
+                f"(`{cur_perm}`)")
 
     with st.form("user_form"):
         c = st.columns(2)
         uname = c[0].text_input("Username", value=pick if editing else "",
                                 disabled=editing)
-        pw = c[1].text_input("Password", value=row["password"] if editing else "")
-        full = st.checkbox("Full access (every tab)", value=(cur_perm == "all"))
+        pw = c[1].text_input(
+            "Password" + (" — leave blank to keep current" if editing else ""),
+            value="", type="password",
+        )
+        full = st.checkbox("Full access (every tab)", value=(cur_perm == "all"),
+                           key=f"full_{pick}")
         st.write("**Grant these tabs:**")
         chosen: list[str] = []
         for tab, grp in GATED_TABS.items():
@@ -1443,12 +1450,15 @@ def page_users() -> None:
                 if cols[i].checkbox(lbl, value=(tok in cur_perm), disabled=full,
                                     key=f"perm_{pick}_{tok}"):
                     chosen.append(tok)
-        saved = st.form_submit_button("Save user", type="primary")
+        saved = st.form_submit_button("Save", type="primary")
 
     if saved:
         uname_v = (pick if editing else uname).strip()
-        if not uname_v or not pw.strip():
-            st.error("Username and password are required.")
+        final_pw = pw.strip() or (row["password"] if editing else "")
+        if not uname_v:
+            st.error("Username is required.")
+        elif not final_pw:
+            st.error("Password is required for a new user.")
         else:
             perm = "all" if full else (",".join(chosen) if chosen else "view-only")
             db.execute(
@@ -1456,10 +1466,11 @@ def page_users() -> None:
                    VALUES (:u, :p, :perm)
                    ON CONFLICT (username) DO UPDATE
                      SET password = EXCLUDED.password, permission = EXCLUDED.permission""",
-                {"u": uname_v, "p": pw.strip(), "perm": perm},
+                {"u": uname_v, "p": final_pw, "perm": perm},
             )
             st.cache_data.clear()
-            st.success(f"Saved '{uname_v}' — {_perm_to_areas(perm)}")
+            st.success(f"Saved '{uname_v}' — access: {_perm_to_areas(perm)}"
+                       + ("" if pw.strip() or not editing else " (password unchanged)"))
             st.rerun()
 
     st.subheader("Delete a user")
