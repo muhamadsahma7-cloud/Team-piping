@@ -128,11 +128,12 @@ BRAND_HTML = (
     "color:#4d8dff;margin-top:3px'>NAEC MALAYSIA SDN BHD</div></div>"
 )
 
-# animated "pipe spool welding" scene for the login screen
+# animated "pipe spool welding" scene for the login screen — a welder
+# kneeling at the pipe joint, laying a weld bead with arc + sparks.
 LOGIN_ANIM = """
 <div class="weld-hero">
-<svg viewBox="0 0 560 180" xmlns="http://www.w3.org/2000/svg" role="img"
-     aria-label="Pipe spool welding animation">
+<svg viewBox="0 0 560 190" xmlns="http://www.w3.org/2000/svg" role="img"
+     aria-label="Welder welding a pipe spool joint">
   <defs>
     <linearGradient id="pipe" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#33506f"/><stop offset=".16" stop-color="#8fb3d6"/>
@@ -145,40 +146,72 @@ LOGIN_ANIM = """
       <stop offset="1" stop-color="rgba(255,138,31,0)"/>
     </radialGradient>
   </defs>
-  <rect x="30"  y="66" width="230" height="50" rx="7" fill="url(#pipe)"/>
-  <rect x="300" y="66" width="230" height="50" rx="7" fill="url(#pipe)"/>
-  <rect x="22"  y="58" width="13" height="66" rx="3" fill="#4d8dff"/>
-  <rect x="525" y="58" width="13" height="66" rx="3" fill="#4d8dff"/>
-  <ellipse class="bead" cx="280" cy="91" rx="10" ry="26" fill="none"
-           stroke="#ffb057" stroke-width="7" stroke-linecap="round"/>
-  <circle class="arc" cx="280" cy="91" r="27" fill="url(#arc)"/>
-  <g class="torch">
-    <rect x="270" y="4" width="20" height="52" rx="4" fill="#1f2933"/>
-    <rect x="276" y="52" width="8" height="16" fill="#c9ddef"/>
+
+  <!-- pipes -->
+  <rect x="30"  y="60" width="230" height="50" rx="7" fill="url(#pipe)"/>
+  <rect x="300" y="60" width="230" height="50" rx="7" fill="url(#pipe)"/>
+  <rect x="22"  y="52" width="13" height="66" rx="3" fill="#4d8dff"/>
+  <rect x="525" y="52" width="13" height="66" rx="3" fill="#4d8dff"/>
+  <line x1="30" y1="150" x2="530" y2="150" stroke="#2b3a52" stroke-width="2"/>
+
+  <!-- welder, kneeling on the near side, reaching up to the joint -->
+  <g class="welder" fill="#222b39">
+    <ellipse cx="215" cy="150" rx="70" ry="7" fill="#000" opacity=".25"/>
+    <!-- back leg folded, front knee up -->
+    <path d="M196,120 L172,150 L188,150 L206,126 Z"/>
+    <path d="M200,120 L214,150 L232,150 L224,124 Z"/>
+    <!-- torso leaning toward joint -->
+    <path d="M198,122 Q206,96 232,78" stroke="#2b3a52" stroke-width="22"
+          stroke-linecap="round" fill="none"/>
+    <!-- helmet + head -->
+    <circle cx="238" cy="70" r="16" fill="#1b2431"/>
+    <rect x="230" y="60" width="24" height="15" rx="3" fill="#0e141d"/>
+    <rect class="visor" x="232" y="64" width="20" height="4" rx="2" fill="#7fe3ff"/>
+    <!-- bracing back arm to knee -->
+    <path d="M226,84 Q210,100 214,120" stroke="#2b3a52" stroke-width="9"
+          stroke-linecap="round" fill="none"/>
+    <!-- welding arm + stinger, weaves while welding -->
+    <g class="warm">
+      <path d="M232,82 Q252,84 268,90" stroke="#2b3a52" stroke-width="10"
+            stroke-linecap="round" fill="none"/>
+      <rect x="264" y="84" width="12" height="12" rx="2" fill="#0e141d"/>
+      <line x1="274" y1="90" x2="286" y2="86" stroke="#c9ddef" stroke-width="3"
+            stroke-linecap="round"/>
+    </g>
   </g>
+
+  <!-- weld bead being laid around the joint -->
+  <ellipse class="bead" cx="286" cy="85" rx="9" ry="25" fill="none"
+           stroke="#ffb057" stroke-width="7" stroke-linecap="round"/>
+  <circle class="arc" cx="286" cy="85" r="24" fill="url(#arc)"/>
   <g fill="#ffc078">
-    <circle class="sp a" cx="280" cy="91" r="2.4"/>
-    <circle class="sp b" cx="280" cy="91" r="1.9"/>
-    <circle class="sp c" cx="280" cy="91" r="2.1"/>
-    <circle class="sp d" cx="280" cy="91" r="1.6"/>
-    <circle class="sp e" cx="280" cy="91" r="2.3"/>
-    <circle class="sp f" cx="280" cy="91" r="1.7"/>
+    <circle class="sp a" cx="286" cy="85" r="2.4"/>
+    <circle class="sp b" cx="286" cy="85" r="1.9"/>
+    <circle class="sp c" cx="286" cy="85" r="2.1"/>
+    <circle class="sp d" cx="286" cy="85" r="1.6"/>
+    <circle class="sp e" cx="286" cy="85" r="2.3"/>
+    <circle class="sp f" cx="286" cy="85" r="1.7"/>
   </g>
 </svg>
 </div>
 <style>
 .weld-hero{display:flex;justify-content:center;margin:.3rem 0 1rem}
 .weld-hero svg{width:min(520px,92vw)}
-.weld-hero .arc,.weld-hero .sp{transform-box:fill-box;transform-origin:center}
+.weld-hero .arc,.weld-hero .sp,.weld-hero .visor{transform-box:fill-box;transform-origin:center}
 .weld-hero .arc{animation:wh-flick .11s steps(2,end) infinite}
 @keyframes wh-flick{from{opacity:.5;transform:scale(.82)}to{opacity:1;transform:scale(1.14)}}
-.weld-hero .bead{stroke-dasharray:172;stroke-dashoffset:172;
+.weld-hero .visor{animation:wh-vis .13s steps(2,end) infinite}
+@keyframes wh-vis{from{opacity:.35}to{opacity:1}}
+.weld-hero .warm{transform-box:fill-box;transform-origin:232px 82px;
+  animation:wh-weave .8s ease-in-out infinite}
+@keyframes wh-weave{0%,100%{transform:rotate(-2deg)}50%{transform:rotate(2.5deg)}}
+.weld-hero .welder{animation:wh-bob 3.6s ease-in-out infinite}
+@keyframes wh-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(2px)}}
+.weld-hero .bead{stroke-dasharray:168;stroke-dashoffset:168;
   animation:wh-lay 3.6s ease-in-out infinite}
-@keyframes wh-lay{0%{stroke-dashoffset:172;opacity:1}
+@keyframes wh-lay{0%{stroke-dashoffset:168;opacity:1}
   55%{stroke-dashoffset:0;opacity:1}82%{stroke-dashoffset:0;opacity:1}
   100%{stroke-dashoffset:0;opacity:.12}}
-.weld-hero .torch{animation:wh-bob 3.6s ease-in-out infinite}
-@keyframes wh-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(4px)}}
 .weld-hero .sp{opacity:0;animation:wh-fly .8s ease-out infinite}
 @keyframes wh-fly{0%{opacity:1;transform:translate(0,0) scale(1)}
   100%{opacity:0;transform:translate(var(--dx),var(--dy)) scale(.15)}}
@@ -187,7 +220,7 @@ LOGIN_ANIM = """
 .weld-hero .c{--dx:-16px;--dy:16px;animation-delay:.26s}
 .weld-hero .d{--dx:20px;--dy:20px;animation-delay:.39s}
 .weld-hero .e{--dx:-34px;--dy:4px;animation-delay:.52s}
-.weld-hero .f{--dx:32px;--dy:0px;animation-delay:.66s}
+.weld-hero .f{--dx:32px;--dy:2px;animation-delay:.66s}
 @media (prefers-reduced-motion:reduce){.weld-hero *{animation:none!important}}
 </style>
 """
