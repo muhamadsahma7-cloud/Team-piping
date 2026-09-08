@@ -1235,9 +1235,13 @@ _WCS_MAX_MB = 25
 
 @st.cache_data(ttl=600, show_spinner="Fetching document…")
 def _wcs_bytes(doc_id: int) -> bytes:
-    v = db.query("SELECT data FROM qc_wcs_docs WHERE id = :i", {"i": doc_id},
-                 ttl=600).iloc[0]["data"]
-    return bytes(v) if v is not None else b""
+    # raw engine, not db.query() — Streamlit's SQL-connection cache can't
+    # serialize a DataFrame that holds a bytea column.
+    from sqlalchemy import text as _t
+    with db.engine().connect() as cx:
+        row = cx.execute(_t("SELECT data FROM qc_wcs_docs WHERE id = :i"),
+                         {"i": doc_id}).first()
+    return bytes(row[0]) if row and row[0] is not None else b""
 
 
 def page_qc_wcs() -> None:
