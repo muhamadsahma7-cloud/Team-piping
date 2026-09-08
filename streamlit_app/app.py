@@ -227,7 +227,9 @@ hr { margin:1rem 0; border-color:var(--line); }
 """,
         unsafe_allow_html=True,
     )
-    if LOGO_URI:
+    # faint logo watermark — only once signed in, so it doesn't ghost
+    # behind the crisp logo on the login card
+    if LOGO_URI and st.session_state.get("user"):
         st.markdown(
             f"""
 <style>
