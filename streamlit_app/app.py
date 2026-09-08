@@ -617,6 +617,8 @@ def page_targets() -> None:
             hol_set, bad = _parse_dates(hol_text)
             if bad:
                 st.error(f"Not valid dates, fix and re-save: {', '.join(bad)}")
+            elif target_date <= plan_start:
+                st.error("Target completion must be a date **after** the plan start.")
             else:
                 db.set_settings({
                     "plan_start": plan_start.isoformat(),
@@ -652,10 +654,20 @@ def page_targets() -> None:
     total_wd = _wdays(plan_start, target_date, rest_s, hol_s)
     elapsed_wd = _wdays(plan_start, min(today, target_date), rest_s, hol_s)
     remain_wd = _wdays(today + timedelta(days=1), target_date, rest_s, hol_s)
-    planned_per_day = scope_di / total_wd if total_wd else 0.0
+
+    if total_wd <= 0:
+        st.error(
+            f"No working days between plan start (**{plan_start.isoformat()}**) and "
+            f"target completion (**{target_date.isoformat()}**). "
+            "The target must be after the plan start — fix the dates above (and check "
+            "rest days / holidays), then **Save plan**."
+        )
+        return
+    planned_per_day = scope_di / total_wd
 
     if target_date < today:
-        st.warning(f"Target date {target_date.isoformat()} is in the past.")
+        st.warning(f"Target date {target_date.isoformat()} is in the past — "
+                   "'required/day' figures are not meaningful.")
     hol_in_window = sum(1 for d in hol_s if plan_start <= d <= target_date)
     st.caption(f"Scope: **{scope_di:,.2f}** dia-inch · working days total **{total_wd}**, "
                f"elapsed **{elapsed_wd}**, remaining **{remain_wd}** "
