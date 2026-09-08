@@ -16,6 +16,7 @@ import base64
 import html
 import math
 import re
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -354,8 +355,12 @@ def logout_splash() -> None:
     """One-shot 'weld cools / session closed' flourish after sign-out."""
     if not st.session_state.pop("just_logged_out", False):
         return
+    reason = st.session_state.pop("logout_reason", "")
+    hi = "Timed out" if reason == "idle" else "Signed out"
+    sub = ("Inactive for 5 minutes &nbsp;·&nbsp; session closed" if reason == "idle"
+           else "Session closed &nbsp;·&nbsp; see you on the next joint")
     st.markdown(
-        """
+        ("""
 <div class="tp-logout">
   <svg viewBox="0 0 220 220" width="150" height="150" aria-hidden="true">
     <defs>
@@ -373,8 +378,8 @@ def logout_splash() -> None:
           stroke="#00e5ff" stroke-width="3" stroke-linecap="round"/>
     <circle class="lo-core" cx="110" cy="110" r="5" fill="#4d8dff"/>
   </svg>
-  <div class="lo-hi">Signed out</div>
-  <div class="lo-sub">Session closed &nbsp;·&nbsp; see you on the next joint</div>
+  <div class="lo-hi">__HI__</div>
+  <div class="lo-sub">__SUB__</div>
 </div>
 <style>
 .tp-logout{position:fixed;inset:0;z-index:2147483000;pointer-events:none;
@@ -404,7 +409,7 @@ def logout_splash() -> None:
   .lo-bead{stroke-dashoffset:100;opacity:.12}.lo-snap,.lo-core{opacity:0}
   .lo-hi,.lo-sub{opacity:1;transform:none}}
 </style>
-""",
+""".replace("__HI__", hi).replace("__SUB__", sub)),
         unsafe_allow_html=True,
     )
 
@@ -454,20 +459,41 @@ def can_see(page: str, perm: str) -> bool:
     return any(t in perm for t in toks)
 
 
+IDLE_LIMIT_S = 300   # auto sign-out after 5 min with no interaction
+
+
 @st.fragment(run_every="1s")
 def sidebar_clock() -> None:
+    la = st.session_state.get("last_active")
+    if la is not None:
+        idle = time.time() - la
+        if idle >= IDLE_LIMIT_S:
+            st.session_state.clear()
+            st.session_state["just_logged_out"] = True
+            st.session_state["logout_reason"] = "idle"
+            try:
+                st.rerun(scope="app")
+            except TypeError:
+                st.rerun()
+            return
     now = datetime.now(MYT)
+    countdown = ""
+    if la is not None and IDLE_LIMIT_S - (time.time() - la) <= 60:
+        left = max(0, int(IDLE_LIMIT_S - (time.time() - la)))
+        countdown = (f"<br><span style='font-size:11px;color:#e0a83a'>"
+                     f"Auto sign-out in {left // 60}:{left % 60:02d}</span>")
     st.markdown(
         "<div style='font-family:ui-monospace,SFMono-Regular,Menlo,monospace;"
         "letter-spacing:.06em;color:#8aa0bd;line-height:1.55;padding:2px 0 4px'>"
         f"{now:%A, %d %b %Y}<br>"
         f"<span style='font-size:18px;font-weight:700;color:#4d8dff'>{now:%H:%M:%S}</span>"
-        " <span style='font-size:11px;color:#6b7a90'>MYT</span></div>",
+        f" <span style='font-size:11px;color:#6b7a90'>MYT</span>{countdown}</div>",
         unsafe_allow_html=True,
     )
 
 
 with st.sidebar:
+    st.session_state["last_active"] = time.time()   # every real (interaction) rerun
     st.markdown(BRAND_HTML, unsafe_allow_html=True)
     st.caption(f"Signed in as **{st.session_state['user']}**")
     if st.button("Sign out", use_container_width=True):
