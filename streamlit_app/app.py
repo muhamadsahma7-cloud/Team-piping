@@ -608,23 +608,31 @@ def page_targets() -> None:
     d_target = (pd.to_datetime(cfg["target_date"]).date()
                 if cfg.get("target_date") else date.today() + timedelta(days=60))
     d_scope = cfg.get("scope", "issued")
-    d_rest = [int(x) for x in (cfg.get("rest") or "6").split(",") if x != ""]
-    d_hol_text = "\n".join((cfg.get("holidays") or "").split(","))
+    _rr = cfg.get("rest")   # '' = deliberately no rest days; missing = default Sunday
+    d_rest = [int(x) for x in _rr.split(",") if x] if _rr is not None else [6]
+    d_hol_text = "\n".join(x for x in (cfg.get("holidays") or "").split(",") if x)
+
+    # seed the form widgets from the saved plan the first time this browser
+    # session opens the page; keyed widgets then keep their value on every
+    # rerun / page switch (previously they reset and looked "unsaved").
+    for _k, _v in {"tp_start": d_start, "tp_target": d_target, "tp_scope": d_scope,
+                   "tp_rest": d_rest, "tp_hol": d_hol_text}.items():
+        st.session_state.setdefault(_k, _v)
 
     with st.form("plan"):
         c = st.columns(4)
-        plan_start = c[0].date_input("Plan start", value=d_start, format="YYYY-MM-DD")
-        target_date = c[1].date_input("Target completion", value=d_target, format="YYYY-MM-DD")
+        plan_start = c[0].date_input("Plan start", key="tp_start", format="YYYY-MM-DD")
+        target_date = c[1].date_input("Target completion", key="tp_target",
+                                      format="YYYY-MM-DD")
         scope = c[2].selectbox(
-            "Scope", ["issued", "all"], index=0 if d_scope == "issued" else 1,
+            "Scope", ["issued", "all"], key="tp_scope",
             format_func=lambda v: "Issued work orders" if v == "issued" else "All shop",
         )
-        rest = c[3].multiselect("Weekly rest days", options=list(range(7)), default=d_rest,
-                                format_func=lambda i: _WD[i])
+        rest = c[3].multiselect("Weekly rest days", options=list(range(7)),
+                                key="tp_rest", format_func=lambda i: _WD[i])
         hol_text = st.text_area(
             "Public holidays (one date per line, YYYY-MM-DD)",
-            value=d_hol_text, height=120,
-            placeholder="2025-08-31\n2025-09-16",
+            key="tp_hol", height=120, placeholder="2026-01-01\n2026-05-01",
         )
         if st.form_submit_button("Save plan", type="primary", disabled=not can_edit):
             hol_set, bad = _parse_dates(hol_text)
@@ -642,6 +650,13 @@ def page_targets() -> None:
                 st.cache_data.clear()
                 st.success("Plan saved.")
                 st.rerun()
+
+    st.caption(
+        f"Saved plan: **{cfg.get('plan_start', '—')} → {cfg.get('target_date', '—')}** · "
+        f"scope **{cfg.get('scope', '—')}** · "
+        f"rest **{cfg.get('rest') or 'none'}** · "
+        f"holidays **{cfg.get('holidays') or 'none'}**"
+    )
     if not can_edit:
         st.caption("View only — needs the 'Targets & plan' grant (or 'all') to change the plan.")
 
