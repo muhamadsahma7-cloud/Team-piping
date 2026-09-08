@@ -1286,8 +1286,8 @@ def page_qc_wcs() -> None:
                     ok += 1
                 if ok:
                     st.cache_data.clear()
-                    stamp = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
-                    st.success(f"Uploaded {ok} file(s) — time-stamped {stamp}.")
+                    st.success(f"Uploaded {ok} file(s) — time-stamped "
+                               f"{pd.Timestamp.now(tz='Asia/Kuala_Lumpur'):%Y-%m-%d %H:%M} MYT.")
                     st.rerun()
     else:
         st.caption("Download only — needs the **QC WCS uploads** grant to add documents.")

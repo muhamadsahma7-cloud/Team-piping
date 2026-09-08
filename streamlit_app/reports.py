@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import io
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+MYT = ZoneInfo("Asia/Kuala_Lumpur")
 
 import pandas as pd
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -267,7 +270,8 @@ def build_master_xlsx(df: pd.DataFrame) -> bytes:
 
 
 def stamp() -> str:
-    return datetime.now().strftime("%Y-%m-%d_%H%M")
+    """Timestamp for file names, in Malaysia time (server clock is UTC)."""
+    return datetime.now(MYT).strftime("%Y-%m-%d_%H%M")
 
 
 # ----------------------------------------------------------------------
