@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import math
+import re
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -131,7 +132,7 @@ PAGE_ICONS = {
     "Overview": "📊", "Targets & plan": "🎯", "Work order summary": "📋",
     "Update progress": "✏️", "Delivery": "🚚", "Spools": "🔩",
     "Classify & export": "🗂️", "QC WCS": "🧾", "Inventory": "📦", "Manpower": "👷",
-    "Data admin": "🛠️", "Users": "👥",
+    "Activity": "📜", "Data admin": "🛠️", "Users": "👥",
 }
 
 
@@ -298,6 +299,7 @@ PAGE_PERMS = {
     "QC WCS": [],
     "Inventory": ["Inventory"],
     "Manpower": ["Manpower Report"],
+    "Activity": [ADMIN],
     "Data admin": [ADMIN],
     "Users": [ADMIN],
 }
@@ -1487,6 +1489,64 @@ def page_users() -> None:
                "Changes take effect at the user's next sign-in.")
 
 
+def _split_activity(raw: str) -> tuple[str, str]:
+    m = re.match(r"^(.*?)\s*\[(.+)\]\s*$", str(raw or ""))
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    return str(raw or "").strip(), "sign-in"
+
+
+def page_activity() -> None:
+    st.header("User activity")
+    if st.session_state.get("permission") != "all":
+        st.warning("Admin only (needs the 'all' permission).")
+        return
+
+    df = db.query(
+        """SELECT id, username AS raw,
+                  to_char(login_time AT TIME ZONE 'Asia/Kuala_Lumpur',
+                          'YYYY-MM-DD HH24:MI:SS') AS ts,
+                  (login_time AT TIME ZONE 'Asia/Kuala_Lumpur')::date AS d
+           FROM user_log ORDER BY id DESC LIMIT 3000""",
+        ttl=0,
+    )
+    if df.empty:
+        st.info("No activity recorded yet.")
+        return
+    df[["user", "action"]] = df["raw"].apply(lambda r: pd.Series(_split_activity(r)))
+
+    c = st.columns(3)
+    c[0].metric("Events (last 3000)", f"{len(df):,}", border=True)
+    c[1].metric("Distinct users", f"{df['user'].nunique():,}", border=True)
+    c[2].metric("Sign-ins", f"{int((df['action'] == 'sign-in').sum()):,}", border=True)
+
+    f = st.columns(3)
+    fu = f[0].multiselect("User", sorted(df["user"].unique()))
+    fa = f[1].multiselect("Action", sorted(df["action"].unique()))
+    since = f[2].date_input("Since", value=None, format="YYYY-MM-DD")
+    v = df
+    if fu:
+        v = v[v["user"].isin(fu)]
+    if fa:
+        v = v[v["action"].isin(fa)]
+    if since:
+        v = v[v["d"] >= since]
+
+    st.subheader(f"Log ({len(v):,})")
+    show_table(
+        v[["ts", "user", "action"]].rename(columns={"ts": "when (MYT)"}),
+        "user_activity",
+    )
+
+    st.subheader("Per user")
+    summ = (df.groupby("user")
+            .agg(events=("id", "count"),
+                 sign_ins=("action", lambda s: int((s == "sign-in").sum())),
+                 last_activity=("ts", "max"))
+            .reset_index().sort_values("last_activity", ascending=False))
+    st.dataframe(summ, use_container_width=True, hide_index=True)
+
+
 _SNAP_PREFIX = "backup_spools_"
 
 
@@ -1659,6 +1719,7 @@ def page_manpower() -> None:
     "QC WCS": page_qc_wcs,
     "Inventory": page_inventory,
     "Manpower": page_manpower,
+    "Activity": page_activity,
     "Data admin": page_admin,
     "Users": page_users,
 }[page]()
