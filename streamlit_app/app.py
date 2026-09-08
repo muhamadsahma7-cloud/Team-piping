@@ -13,6 +13,7 @@ Run:
 from __future__ import annotations
 
 import base64
+import html
 import math
 import re
 from datetime import date, timedelta
@@ -265,6 +266,7 @@ def login_gate() -> None:
         else:
             st.session_state["user"] = u.strip()
             st.session_state["permission"] = perm
+            st.session_state["just_logged_in"] = True
             try:
                 db.log_login(u.strip())
             except Exception:
@@ -273,8 +275,81 @@ def login_gate() -> None:
     st.stop()
 
 
+def welcome_splash() -> None:
+    """One-shot full-screen weld-in flourish right after a successful login.
+    CSS/SVG only — fades itself out, no rerun needed."""
+    if not st.session_state.pop("just_logged_in", False):
+        return
+    who = html.escape(str(st.session_state.get("user", ""))[:40]) or "welder"
+    st.markdown(
+        """
+<div class="tp-welcome">
+  <svg viewBox="0 0 220 220" width="150" height="150" aria-hidden="true">
+    <defs>
+      <linearGradient id="tpwHeat" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#ffffff"/><stop offset=".35" stop-color="#ffd27a"/>
+        <stop offset=".7" stop-color="#ff8a1f"/><stop offset="1" stop-color="#ff5a12"/>
+      </linearGradient>
+    </defs>
+    <circle cx="110" cy="110" r="80" fill="none" stroke="#24344f" stroke-width="10"/>
+    <circle class="tpw-bead" cx="110" cy="110" r="80" fill="none"
+            stroke="url(#tpwHeat)" stroke-width="10" stroke-linecap="round"
+            pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"
+            transform="rotate(-90 110 110)"/>
+    <g class="tpw-torch">
+      <circle cx="110" cy="30" r="6" fill="#fff"/>
+      <animateTransform attributeName="transform" type="rotate"
+        from="0 110 110" to="360 110 110" dur="1s" begin="0.15s" fill="freeze"/>
+    </g>
+    <g class="tpw-spark" stroke="#00e5ff" stroke-width="3" stroke-linecap="round">
+      <line x1="110" y1="110" x2="110" y2="66"/><line x1="110" y1="110" x2="151" y2="69"/>
+      <line x1="110" y1="110" x2="154" y2="110"/><line x1="110" y1="110" x2="151" y2="151"/>
+      <line x1="110" y1="110" x2="110" y2="154"/><line x1="110" y1="110" x2="69" y2="151"/>
+      <line x1="110" y1="110" x2="66" y2="110"/><line x1="110" y1="110" x2="69" y2="69"/>
+    </g>
+  </svg>
+  <div class="tpw-hi">Welcome</div>
+  <div class="tpw-name">__WHO__</div>
+  <div class="tpw-sub">Access granted &nbsp;·&nbsp; Weld Control System</div>
+</div>
+<style>
+.tp-welcome{position:fixed;inset:0;z-index:2147483000;pointer-events:none;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
+  background:radial-gradient(1200px 720px at 50% 42%,#16233b 0%,#0b1220 72%);
+  animation:tpw-out .7s ease-in 2.1s forwards;font-family:var(--f-body,system-ui,sans-serif)}
+@keyframes tpw-out{to{opacity:0;visibility:hidden}}
+.tpw-bead{animation:tpw-lay 1s ease-out .15s forwards;
+  filter:drop-shadow(0 0 6px #ff8a1f88)}
+@keyframes tpw-lay{to{stroke-dashoffset:0}}
+.tpw-torch circle{filter:drop-shadow(0 0 6px #fff) drop-shadow(0 0 16px #ffb057)}
+.tpw-spark{transform-box:fill-box;transform-origin:center;opacity:0;
+  animation:tpw-burst .55s ease-out 1s forwards}
+@keyframes tpw-burst{0%{opacity:1;transform:scale(.15)}
+  70%{opacity:1}100%{opacity:0;transform:scale(1.5)}}
+.tpw-hi{font-size:2.4rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase;
+  color:#f1f5f9;opacity:0;transform:translateY(14px);
+  animation:tpw-rise .5s ease-out 1.15s forwards}
+.tpw-name{font-size:1.15rem;font-weight:700;letter-spacing:.06em;color:#4d8dff;
+  text-shadow:0 0 18px #4d8dff66;opacity:0;transform:translateY(12px);
+  animation:tpw-rise .5s ease-out 1.35s forwards}
+.tpw-sub{font-family:var(--f-mono,ui-monospace,monospace);font-size:.72rem;
+  letter-spacing:.22em;text-transform:uppercase;color:#8aa0bd;opacity:0;
+  animation:tpw-rise .5s ease-out 1.55s forwards}
+@keyframes tpw-rise{to{opacity:1;transform:translateY(0)}}
+@media (prefers-reduced-motion:reduce){
+  .tp-welcome{animation:tpw-out .35s ease .9s forwards}
+  .tp-welcome *{animation:none!important}
+  .tpw-bead{stroke-dashoffset:0}.tpw-spark{opacity:0}
+  .tpw-hi,.tpw-name,.tpw-sub{opacity:1;transform:none}}
+</style>
+""".replace("__WHO__", who),
+        unsafe_allow_html=True,
+    )
+
+
 inject_css()
 login_gate()
+welcome_splash()
 
 # ---- access control -------------------------------------------------
 # Permission tokens recognised by the app. A user's `permission` string in
