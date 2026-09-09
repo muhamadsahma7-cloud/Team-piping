@@ -536,8 +536,9 @@ with st.sidebar:
     page = st.radio("Page", visible, label_visibility="collapsed",
                     format_func=lambda p: f"{PAGE_ICONS.get(p, '•')}  {p}")
     st.divider()
-    st.caption("🌗 Light / Dark — set it in the **⋮** menu (top-right) → "
-               "**Settings → Choose app theme**.")
+    st.caption("🌗 **Light / Dark** — top-right **⋮** (or **≡**) → **Settings** → "
+               "*Appearance* / *Choose app theme* → Light · Dark · Use system. "
+               "The choice is saved in this browser.")
 
 # guard against a stale / disallowed selection
 if not can_see(page, st.session_state.get("permission", "")):
