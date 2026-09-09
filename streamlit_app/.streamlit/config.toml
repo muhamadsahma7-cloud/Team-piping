@@ -4,7 +4,7 @@
 # st.context.theme. Keep in sync with ../.streamlit/config.toml.
 
 [theme]
-base = "dark"            # default look; viewer can switch via ⋮ → Settings
+base = "light"           # default look; viewer can switch via ⋮ → Settings
 font = "sans serif"
 primaryColor = "#2f6feb"
 
