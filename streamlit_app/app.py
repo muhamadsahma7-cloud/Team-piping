@@ -645,7 +645,10 @@ with st.sidebar:
         selection_mode="single", key="theme_seg", label_visibility="collapsed",
     ) or _cur
     _new = _pick.lower()
-    if _new != st.session_state.get("theme_choice"):
+    # only persist on a real user pick - not the first-load default
+    # reconciliation, which would otherwise write ?theme= and rerun on
+    # every fresh session (and race with the ?scan= param)
+    if _new != ("dark" if is_dark() else "light"):
         st.session_state["theme_choice"] = _new
         st.query_params["theme"] = _new
         st.rerun()
@@ -1791,15 +1794,22 @@ def page_qr_labels() -> None:
 
     settings = db.get_settings()
     saved_url = settings.get("app_url", "")
-    base = st.text_input(
+    typed = st.text_input(
         "App URL (goes inside every QR)", value=saved_url,
         placeholder="https://your-app.streamlit.app",
-        help="The public address of this site. Saved for next time.",
-    ).strip()
+        help="Just the site address — no ?theme=… or other bits. Anything after "
+             "the domain is stripped automatically.",
+    )
+    base = qr.clean_base(typed)               # drop any pasted ?query / #fragment
+    if base and base != typed.strip():
+        st.caption(f"Will use: `{base}`")
     if base and base != saved_url and st.button("Save app URL"):
         db.set_settings({"app_url": base})
-        st.success("Saved.")
+        st.success(f"Saved `{base}`.")
         st.rerun()
+    elif saved_url and qr.clean_base(saved_url) != saved_url:
+        st.warning(f"The saved URL has extra bits — click **Save app URL** to "
+                   f"fix it to `{qr.clean_base(saved_url)}`, then rebuild the sheet.")
 
     # -- kiosk sign-in: bake &k=<token> into every QR so the phone never
     #    sees the login screen (auto-signs-in as a scan-only account) ------

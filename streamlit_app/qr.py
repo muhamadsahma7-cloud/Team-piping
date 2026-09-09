@@ -18,8 +18,22 @@ def new_code(n: int = 10) -> str:
     return "".join(secrets.choice(_ALPHABET) for _ in range(n))
 
 
+def clean_base(url: str) -> str:
+    """scheme + host + path only - drop any ?query or #fragment a user may
+    have pasted in (e.g. a copied address bar with ?theme=dark)."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    u = (url or "").strip()
+    if not u:
+        return ""
+    if "//" not in u:
+        u = "https://" + u
+    p = urlsplit(u)
+    return urlunsplit((p.scheme or "https", p.netloc, p.path.rstrip("/"), "", ""))
+
+
 def scan_url(base: str, code: str, kiosk_token: str = "") -> str:
-    base = (base or "").strip().rstrip("/")
+    base = clean_base(base)
     q = f"?scan={code}"
     if kiosk_token:
         q += f"&k={kiosk_token}"
