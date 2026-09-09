@@ -208,6 +208,16 @@ div[data-testid="stMetric"] {
   border-radius:12px; padding:14px 16px;
 }
 div[data-testid="stMetric"] label p { color:#94a3b8; font-weight:500; }
+/* never clip / ellipsis a metric label — let it wrap to full text */
+div[data-testid="stMetric"] label,
+div[data-testid="stMetricLabel"],
+div[data-testid="stMetricLabel"] *,
+div[data-testid="stMetricValue"],
+div[data-testid="stMetricValue"] * {
+  white-space:normal !important; overflow:visible !important;
+  text-overflow:clip !important; max-width:none !important;
+}
+div[data-testid="stMetricLabel"] p { font-size:.74rem; line-height:1.25; }
 .stButton>button, .stDownloadButton>button, .stForm button {
   border-radius:9px; font-weight:600;
 }
