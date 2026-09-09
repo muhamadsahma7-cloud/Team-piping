@@ -1694,10 +1694,33 @@ def page_scan() -> None:
     view.columns = ["Joint", "Size", "Fit-Up", "Welding"]
     st.dataframe(view, use_container_width=True, hide_index=True)
 
-    activity = st.radio("Activity just completed", ["Fit-Up", "Welding"],
-                        horizontal=True)
-    col = "fitup_date" if activity == "Fit-Up" else "welding_date"
+    # Who is updating — the activity follows their trade:
+    #   Fitter -> Fit-Up only,  Welder -> Welding only,  Both -> choose.
+    allw = db.query(
+        "SELECT id, name, trade, coalesce(stamp_no,'') AS stamp_no, pin "
+        "FROM field_workers WHERE active ORDER BY name", ttl=0,
+    )
+    with st.expander("➕ New fitter / welder? Register your name"):
+        _register_worker_form(key="reg_scan")
+    if allw.empty:
+        st.warning("No fitter / welder registered yet — register above, then it "
+                   "appears here.")
+        return
 
+    who = st.selectbox("Your name", allw["name"].tolist())
+    wrow = allw.loc[allw["name"] == who].iloc[0]
+    wtrade = str(wrow["trade"])
+
+    if wtrade == "Fitter":
+        activity = "Fit-Up"
+    elif wtrade == "Welder":
+        activity = "Welding"
+    else:                                        # Both
+        activity = st.radio("Activity just completed", ["Fit-Up", "Welding"],
+                            horizontal=True)
+    st.caption(f"**{who}** · {wtrade} → recording **{activity}**")
+
+    col = "fitup_date" if activity == "Fit-Up" else "welding_date"
     if activity == "Fit-Up":
         elig = js.loc[js["fitup_date"] == "", "joint_no"].tolist()
         none_msg = "Every joint on this spool is already fitted-up."
@@ -1715,23 +1738,11 @@ def page_scan() -> None:
         return
 
     picked = st.multiselect(f"Joints to mark {activity} complete", elig, default=elig)
-    trade = "Fitter" if activity == "Fit-Up" else "Welder"
-    fw = _field_workers(trade)
-
-    with st.expander(f"➕ New {trade.lower()}? Register your name"):
-        _register_worker_form(key=f"reg_scan_{trade}", fixed_trade=trade)
-
-    if fw.empty:
-        st.warning(f"No registered {trade.lower()} yet — register above, then it "
-                   "appears here.")
-        return
-    who = st.selectbox(f"{trade} name", fw["name"].tolist())
     pin = st.text_input("Your PIN", type="password", max_chars=6)
     wd = st.date_input("Date completed", value=date.today(), format="DD/MM/YYYY")
 
     if st.button(f"✅ Confirm {activity} for {len(picked)} joint(s)", type="primary",
                  use_container_width=True, disabled=not picked):
-        wrow = fw.loc[fw["name"] == who].iloc[0]
         if (pin or "").strip() != str(wrow["pin"]):
             st.error("Wrong PIN.")
             return
