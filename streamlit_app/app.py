@@ -476,6 +476,12 @@ def logout_splash() -> None:
 
 
 inject_css()
+# A scanned spool QR lands on ?scan=<code>. Streamlit Community Cloud can
+# drop the query string while waking the app or through the login rerun,
+# so stash it now and heal the URL again once we're past the login gate.
+_qs = st.query_params.get("scan")
+if _qs and _qs != st.session_state.get("_scan_dismissed"):
+    st.session_state["pending_scan"] = _qs
 logout_splash()
 login_gate()
 welcome_splash()
@@ -486,7 +492,7 @@ welcome_splash()
 KNOWN_TOKENS = [
     "all", "Spools", "Project Summary", "Targets", "Update Fit-Up", "Update Welding",
     "Painting Delivery", "Site Delivery", "Generate Reports", "Inventory",
-    "Manpower Report", "QC WCS",
+    "Manpower Report", "QC WCS", "Field Scan",
 ]
 ADMIN = "__admin__"   # page tokens that only 'all' can satisfy
 
@@ -572,7 +578,30 @@ with st.sidebar:
     st.divider()
     _perm = st.session_state.get("permission", "")
     visible = [p for p in PAGE_PERMS if can_see(p, _perm)] or ["Overview"]
-    page = st.radio("Page", visible, label_visibility="collapsed",
+
+    # A scanned spool QR (?scan=<code>, stashed into pending_scan up top so
+    # it survives the login / wake round-trip) pins the nav to Scan &
+    # update. Decide this BEFORE the radio so the widget actually shows it
+    # selected - then tapping any other tab is a real change and the
+    # on_change handler can release the pin.
+    _sc = st.session_state.get("pending_scan")
+    if _sc and "Scan & update" in visible:
+        if st.query_params.get("scan") != _sc:
+            st.query_params["scan"] = _sc          # heal URL after login / wake
+        st.session_state["nav"] = "Scan & update"
+
+    def _leave_scan() -> None:            # picking a tab drops the pending scan
+        st.session_state["_scan_dismissed"] = st.session_state.pop("pending_scan", None)
+        for _drop in (lambda: st.query_params.pop("scan", None),
+                      lambda: st.query_params.__delitem__("scan")):
+            try:
+                _drop()
+                break
+            except Exception:
+                pass
+
+    page = st.radio("Page", visible, label_visibility="collapsed", key="nav",
+                    on_change=_leave_scan,
                     format_func=lambda p: f"{PAGE_ICONS.get(p, '•')}  {p}")
     st.divider()
     _cur = "Dark" if is_dark() else "Light"
@@ -585,11 +614,6 @@ with st.sidebar:
         st.session_state["theme_choice"] = _new
         st.query_params["theme"] = _new
         st.rerun()
-
-# a phone that scanned a joint QR arrives on ?scan=<code> - go straight there
-if st.query_params.get("scan") and can_see("Scan & update",
-                                           st.session_state.get("permission", "")):
-    page = "Scan & update"
 
 # guard against a stale / disallowed selection
 if not can_see(page, st.session_state.get("permission", "")):
@@ -1482,7 +1506,8 @@ def _scan_history(code: str) -> None:
 def page_scan() -> None:
     st.header("📲 Scan & update")
 
-    code = (st.query_params.get("scan") or "").strip()
+    code = (st.query_params.get("scan")
+            or st.session_state.get("pending_scan") or "").strip()
     code = st.text_input("Spool QR code", value=code,
                          help="Scanned from the phone camera, or type the code "
                               "printed under the QR.").strip().upper()
