@@ -251,6 +251,49 @@ create table if not exists public.qc_wcs_docs (
 create index if not exists idx_qc_wcs_uploaded_at on public.qc_wcs_docs (uploaded_at desc);
 
 -- =====================================================================
+-- QR scan progress update  (see supabase/qr_feature.sql for notes)
+--   spools.qr_id   - opaque per-joint code printed as the QR label
+--   field_workers  - self-registered fitters / welders (name + PIN)
+--   field_updates  - append-only audit; UNIQUE(spool_id, activity)
+--                    blocks double entry at the database level
+-- =====================================================================
+alter table public.spools add column if not exists qr_id text;
+create unique index if not exists uq_spools_qr_id
+    on public.spools (qr_id) where qr_id is not null;
+
+create table if not exists public.field_workers (
+    id            bigint generated always as identity primary key,
+    name          text not null,
+    trade         text not null check (trade in ('Fitter', 'Welder', 'Both')),
+    stamp_no      text,
+    phone         text,
+    pin           text not null,
+    active        boolean not null default true,
+    registered_at timestamptz not null default now()
+);
+create unique index if not exists uq_field_workers_name_trade
+    on public.field_workers (lower(name), trade);
+
+create table if not exists public.field_updates (
+    id           bigint generated always as identity primary key,
+    spool_id     bigint not null references public.spools (id),
+    activity     text not null check (activity in ('Fit-Up', 'Welding')),
+    work_date    text not null,
+    worker_id    bigint references public.field_workers (id),
+    worker_name  text,
+    stamp_no     text,
+    source       text not null default 'qr',
+    app_user     text,
+    recorded_at  timestamptz not null default now()
+);
+create unique index if not exists uq_field_updates_joint_activity
+    on public.field_updates (spool_id, activity);
+create index if not exists idx_field_updates_recorded_at
+    on public.field_updates (recorded_at desc);
+create index if not exists idx_field_updates_spool
+    on public.field_updates (spool_id);
+
+-- =====================================================================
 -- Row Level Security
 -- RLS is ON for every table and NO anon/authenticated policies are
 -- created. That means the public `anon` and `authenticated` API keys
@@ -271,6 +314,8 @@ alter table public.user_log          enable row level security;
 alter table public.user_sessions     enable row level security;
 alter table public.project_settings  enable row level security;
 alter table public.qc_wcs_docs        enable row level security;
+alter table public.field_workers     enable row level security;
+alter table public.field_updates     enable row level security;
 
 -- =====================================================================
 -- First admin (a fresh database has no users). Uncomment, set a real

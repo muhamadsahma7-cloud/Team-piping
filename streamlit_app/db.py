@@ -64,6 +64,26 @@ def execute_many(sql: str, param_list: list[dict]) -> None:
         s.commit()
 
 
+def write(sql: str, params: dict | None = None) -> int:
+    """Write query; returns the number of rows affected."""
+    with _conn().session as s:
+        r = s.execute(text(sql), params or {})
+        s.commit()
+        return r.rowcount
+
+
+def transaction(steps: list[tuple[str, dict]]) -> list[int]:
+    """Run several writes in ONE transaction. Returns each step's rowcount.
+    Any error rolls the whole thing back and propagates (e.g. a unique
+    constraint -> sqlalchemy.exc.IntegrityError)."""
+    out: list[int] = []
+    with _conn().session as s:
+        for sql, p in steps:
+            out.append(s.execute(text(sql), p or {}).rowcount)
+        s.commit()
+    return out
+
+
 # ------------------------------------------------------------------ auth
 def check_login(username: str, password: str) -> str | None:
     """Return the permission string on success, else None.

@@ -28,6 +28,7 @@ import pandas as pd
 import streamlit as st
 
 import db
+import qr
 import reports
 
 _LOGO_PATH = Path(__file__).parent / "assets" / "naec_logo.jpg"
@@ -152,7 +153,8 @@ BRAND_HTML = (
 
 PAGE_ICONS = {
     "Overview": "📊", "Targets & plan": "🎯", "Work order summary": "📋",
-    "Update progress": "✏️", "Delivery": "🚚", "Spools": "🔩",
+    "Update progress": "✏️", "Scan & update": "📲", "Field workers": "🦺",
+    "QR labels": "🏷️", "Delivery": "🚚", "Spools": "🔩",
     "Classify & export": "🗂️", "QC WCS": "🧾", "Inventory": "📦", "Manpower": "👷",
     "Activity": "📜", "Data admin": "🛠️", "Users": "👥",
 }
@@ -495,6 +497,9 @@ PAGE_PERMS = {
     "Targets & plan": ["Targets"],
     "Work order summary": [],
     "Update progress": ["Update Fit-Up", "Update Welding"],
+    "Scan & update": ["Field Scan", "Update Fit-Up", "Update Welding"],
+    "Field workers": ["Field Scan"],
+    "QR labels": [ADMIN],
     "Delivery": ["Painting Delivery", "Site Delivery"],
     "Spools": [],
     "Classify & export": ["Generate Reports"],
@@ -580,6 +585,11 @@ with st.sidebar:
         st.session_state["theme_choice"] = _new
         st.query_params["theme"] = _new
         st.rerun()
+
+# a phone that scanned a joint QR arrives on ?scan=<code> - go straight there
+if st.query_params.get("scan") and can_see("Scan & update",
+                                           st.session_state.get("permission", "")):
+    page = "Scan & update"
 
 # guard against a stale / disallowed selection
 if not can_see(page, st.session_state.get("permission", "")):
@@ -1431,6 +1441,318 @@ def page_update() -> None:
         st.rerun()
 
 
+# =====================================================================
+# QR scan -> update progress   (draft)
+#   * a fitter / welder registers his name + PIN once  (Field workers)
+#   * the office prints a QR per shop joint             (QR labels)
+#   * on the floor he scans the joint, picks Fit-Up / Welding, keys his
+#     PIN, confirms -> the date lands on spools + an audit row.
+#   * UNIQUE(spool_id, activity) on field_updates + a guarded UPDATE make
+#     a second scan a no-op ("cannot double entry").
+# =====================================================================
+def _field_workers(trade_needed: str) -> pd.DataFrame:
+    return db.query(
+        """SELECT id, name, trade, coalesce(stamp_no,'') AS stamp_no, pin
+             FROM field_workers
+            WHERE active AND (trade = :t OR trade = 'Both')
+            ORDER BY name""",
+        {"t": trade_needed}, ttl=0,
+    )
+
+
+def page_scan() -> None:
+    st.header("📲 Scan & update")
+
+    code = (st.query_params.get("scan") or "").strip()
+    code = st.text_input("Joint QR code", value=code,
+                         help="Scanned automatically from the phone camera, "
+                              "or type the code printed under the QR.").strip().upper()
+    if not code:
+        st.info("Scan a joint's QR label with your phone camera, or key its code above.")
+        return
+
+    j = db.query(
+        """SELECT id, iso_dwg_no, line_no, iso_run_no, dwg_spool_no, joint_no,
+                  joint_size, wo_no, batch_no,
+                  coalesce(fitup_date,'')   AS fitup_date,
+                  coalesce(welding_date,'') AS welding_date
+             FROM spools WHERE qr_id = :c""",
+        {"c": code}, ttl=0,
+    )
+    if j.empty:
+        st.error(f"No joint carries code **{code}**. Check the label, or ask the "
+                 "office to regenerate it on the **QR labels** page.")
+        return
+    r = j.iloc[0]
+    sid = int(r["id"])
+    try:
+        size_txt = f"{float(r['joint_size']):g}\""
+    except (TypeError, ValueError):
+        size_txt = "—"
+
+    st.markdown(
+        f"### {r['iso_dwg_no'] or '—'} &nbsp;·&nbsp; Spool {r['dwg_spool_no'] or '—'} "
+        f"&nbsp;·&nbsp; Joint {r['joint_no'] or '—'}\n"
+        f"**Line** {r['line_no'] or '—'} &nbsp;·&nbsp; **Page** {r['iso_run_no'] or '—'} "
+        f"&nbsp;·&nbsp; **Size** {size_txt} &nbsp;·&nbsp; "
+        f"**WO** {r['wo_no'] or '—'} &nbsp;·&nbsp; **Batch** {r['batch_no'] or '—'}"
+    )
+    m1, m2 = st.columns(2)
+    m1.metric("Fit-Up", r["fitup_date"] or "not yet")
+    m2.metric("Welding", r["welding_date"] or "not yet")
+
+    fu_done, wd_done = r["fitup_date"] != "", r["welding_date"] != ""
+    opts = ([] if fu_done else ["Fit-Up"]) + (["Welding"] if fu_done and not wd_done else [])
+
+    hist = db.query(
+        """SELECT activity, work_date,
+                  coalesce(worker_name,'') AS worker,
+                  coalesce(stamp_no,'')    AS stamp,
+                  to_char(recorded_at AT TIME ZONE 'Asia/Kuala_Lumpur',
+                          'YYYY-MM-DD HH24:MI') AS recorded
+             FROM field_updates WHERE spool_id = :s ORDER BY recorded_at""",
+        {"s": sid}, ttl=0,
+    )
+
+    if not opts:
+        st.success("This joint is fully welded — nothing left to record. ✅"
+                   if wd_done else "Nothing to record here.")
+        if not hist.empty:
+            st.caption("Scan history")
+            st.dataframe(hist, use_container_width=True, hide_index=True)
+        return
+
+    activity = st.radio("Activity just completed", opts, horizontal=True)
+    trade = "Fitter" if activity == "Fit-Up" else "Welder"
+
+    fw = _field_workers(trade)
+    if fw.empty:
+        st.warning(f"No registered {trade.lower()} yet — open **Field workers** "
+                   "and register first.")
+        return
+
+    who = st.selectbox(f"{trade} name", fw["name"].tolist())
+    pin = st.text_input("Your PIN", type="password", max_chars=6)
+    wd = st.date_input("Date completed", value=date.today(), format="DD/MM/YYYY")
+
+    if st.button(f"✅ Confirm {activity} complete", type="primary",
+                 use_container_width=True):
+        wrow = fw.loc[fw["name"] == who].iloc[0]
+        if (pin or "").strip() != str(wrow["pin"]):
+            st.error("Wrong PIN.")
+            return
+
+        col = "fitup_date" if activity == "Fit-Up" else "welding_date"
+        seq = " AND coalesce(fitup_date,'') <> '' " if activity == "Welding" else ""
+        sql = (
+            f"WITH upd AS ( UPDATE spools SET {col} = :d "
+            f"WHERE id = :s AND coalesce({col},'') = '' {seq} RETURNING id ) "
+            "INSERT INTO field_updates (spool_id, activity, work_date, worker_id, "
+            "worker_name, stamp_no, source, app_user) "
+            "SELECT :s, :a, :d, :wid, :wn, :sn, 'qr', :au FROM upd"
+        )
+        params = {
+            "d": wd.isoformat(), "s": sid, "a": activity,
+            "wid": int(wrow["id"]), "wn": who,
+            "sn": (wrow["stamp_no"] or None), "au": st.session_state.get("user"),
+        }
+        try:
+            n = db.write(sql, params)
+        except Exception as e:                      # unique index = already logged
+            msg = str(e).lower()
+            if "uq_field_updates" in msg or "duplicate key" in msg:
+                st.warning(f"{activity} was already recorded for this joint. "
+                           "No double entry.")
+            else:
+                st.error(f"Could not save: {e}")
+            return
+
+        if n == 0:
+            live = db.query(
+                "SELECT coalesce(fitup_date,'') fu, coalesce(welding_date,'') wd "
+                "FROM spools WHERE id = :s", {"s": sid}, ttl=0,
+            ).iloc[0]
+            if activity == "Welding" and live["fu"] == "":
+                st.error("Fit-Up for this joint isn't recorded yet — do Fit-Up first.")
+            else:
+                st.warning(f"{activity} was already recorded for this joint. "
+                           "No double entry.")
+        else:
+            st.success(f"{activity} recorded for joint {r['joint_no']} "
+                       f"by {who} on {wd:%d/%m/%Y}. Terima kasih!")
+        st.cache_data.clear()
+        st.rerun()
+
+    if not hist.empty:
+        st.caption("Scan history")
+        st.dataframe(hist, use_container_width=True, hide_index=True)
+
+
+def page_field_workers() -> None:
+    st.header("🦺 Field workers")
+    st.caption("Fitters and welders register once. The name + PIN signs every "
+               "QR scan done on the shop floor.")
+    is_admin = st.session_state.get("permission", "") == "all"
+
+    with st.form("reg_fw", clear_on_submit=True):
+        st.subheader("Register")
+        c = st.columns(2)
+        name = c[0].text_input("Full name")
+        trade = c[1].selectbox("Trade", ["Fitter", "Welder", "Both"])
+        c2 = st.columns(2)
+        stamp = c2[0].text_input("Stamp / stencil no (optional)")
+        phone = c2[1].text_input("Phone (optional)")
+        c3 = st.columns(2)
+        pin1 = c3[0].text_input("Choose a PIN (4-6 digits)", type="password", max_chars=6)
+        pin2 = c3[1].text_input("Confirm PIN", type="password", max_chars=6)
+        go = st.form_submit_button("Register", type="primary")
+    if go:
+        nm = (name or "").strip()
+        p1, p2 = (pin1 or "").strip(), (pin2 or "").strip()
+        if not nm:
+            st.warning("Enter a name.")
+        elif not (p1.isdigit() and 4 <= len(p1) <= 6):
+            st.warning("PIN must be 4 to 6 digits.")
+        elif p1 != p2:
+            st.warning("The two PINs don't match.")
+        else:
+            try:
+                db.execute(
+                    """INSERT INTO field_workers (name, trade, stamp_no, phone, pin)
+                       VALUES (:n, :t, :s, :ph, :pin)""",
+                    {"n": nm, "t": trade, "s": stamp.strip() or None,
+                     "ph": phone.strip() or None, "pin": p1},
+                )
+                st.cache_data.clear()
+                st.success(f"Registered {nm} ({trade}).")
+                st.rerun()
+            except Exception as e:
+                if "uq_field_workers" in str(e) or "duplicate" in str(e).lower():
+                    st.error(f"{nm} is already registered as {trade}.")
+                else:
+                    st.error(f"Could not register: {e}")
+
+    st.divider()
+    st.subheader("Registered")
+    df = db.query(
+        """SELECT id, name, trade,
+                  coalesce(stamp_no,'') AS stamp_no,
+                  coalesce(phone,'')    AS phone, active,
+                  to_char(registered_at AT TIME ZONE 'Asia/Kuala_Lumpur',
+                          'YYYY-MM-DD') AS since
+             FROM field_workers ORDER BY active DESC, name""",
+        ttl=0,
+    )
+    if df.empty:
+        st.info("Nobody registered yet.")
+        return
+    st.dataframe(df.drop(columns=["id"]), use_container_width=True, hide_index=True)
+
+    if is_admin:
+        st.markdown("**Admin**")
+        labels = (df["name"] + "  ·  " + df["trade"]).tolist()
+        cc = st.columns([3, 1, 1])
+        pick = cc[0].selectbox("Worker", labels, label_visibility="collapsed")
+        sel = df.iloc[labels.index(pick)]
+        if cc[1].button("Toggle active", use_container_width=True):
+            db.execute("UPDATE field_workers SET active = NOT active WHERE id = :i",
+                       {"i": int(sel["id"])})
+            st.cache_data.clear()
+            st.rerun()
+        if cc[2].button("🗑 Delete", use_container_width=True):
+            try:
+                db.execute("DELETE FROM field_workers WHERE id = :i",
+                           {"i": int(sel["id"])})
+                st.cache_data.clear()
+                st.rerun()
+            except Exception:
+                st.error("Can't delete — this worker already has scan history. "
+                         "Toggle them inactive instead.")
+
+
+def page_qr_labels() -> None:
+    st.header("🏷️ QR labels")
+    st.caption("Give every shop joint a QR code, then print the sheet and stick "
+               "one label per joint. Scanning it opens this app straight at that "
+               "joint.")
+
+    settings = db.get_settings()
+    saved_url = settings.get("app_url", "")
+    base = st.text_input(
+        "App URL (goes inside every QR)", value=saved_url,
+        placeholder="https://your-app.streamlit.app",
+        help="The public address of this site. Saved for next time.",
+    ).strip()
+    if base and base != saved_url and st.button("Save app URL"):
+        db.set_settings({"app_url": base})
+        st.success("Saved.")
+        st.rerun()
+
+    miss = int(db.query("SELECT count(*) n FROM spools "
+                        "WHERE shop_field='S' AND coalesce(qr_id,'')=''",
+                        ttl=0).iloc[0]["n"])
+    have = int(db.query("SELECT count(*) n FROM spools "
+                        "WHERE shop_field='S' AND coalesce(qr_id,'')<>''",
+                        ttl=0).iloc[0]["n"])
+    st.write(f"Shop joints with a code: **{have}**  ·  without: **{miss}**")
+
+    if miss and st.button(f"Assign codes to {miss} joint(s)", type="primary"):
+        ids = db.query("SELECT id FROM spools WHERE shop_field='S' "
+                       "AND coalesce(qr_id,'')='' ORDER BY id", ttl=0)["id"].tolist()
+        db.execute_many(
+            "UPDATE spools SET qr_id = :c WHERE id = :i AND coalesce(qr_id,'')=''",
+            [{"c": qr.new_code(), "i": int(i)} for i in ids],
+        )
+        st.cache_data.clear()
+        st.success(f"Assigned {len(ids)} codes.")
+        st.rerun()
+
+    st.divider()
+    st.subheader("Print sheet")
+    scope = st.radio("Which joints",
+                     ["By work order", "By batch", "By ISO drawing", "All shop joints"],
+                     horizontal=True)
+    filt, val = "", None
+    _pick_from = lambda c: db.query(
+        f"SELECT DISTINCT {c} v FROM spools WHERE shop_field='S' "
+        f"AND coalesce({c},'')<>'' ORDER BY 1", ttl=0)["v"].tolist()
+    if scope == "By work order":
+        val = st.selectbox("WO no", _pick_from("wo_no")); filt = "AND wo_no = :v"
+    elif scope == "By batch":
+        val = st.selectbox("Batch no", _pick_from("batch_no")); filt = "AND batch_no = :v"
+    elif scope == "By ISO drawing":
+        val = st.selectbox("ISO DWG NO", _pick_from("iso_dwg_no")); filt = "AND iso_dwg_no = :v"
+
+    rows = db.query(
+        f"""SELECT qr_id,
+                   iso_dwg_no  AS iso,
+                   line_no     AS line,
+                   dwg_spool_no AS spool,
+                   joint_no    AS joint,
+                   joint_size  AS size
+              FROM spools
+             WHERE shop_field='S' AND coalesce(qr_id,'')<>'' {filt}
+             ORDER BY iso_dwg_no, dwg_spool_no, joint_no""",
+        ({"v": val} if val is not None else {}), ttl=0,
+    )
+    if not rows.empty:
+        rows["size"] = pd.to_numeric(rows["size"], errors="coerce")
+    st.write(f"{len(rows)} label(s) ready.")
+
+    if not rows.empty and st.button("Build PDF sheet", type="primary"):
+        if not base:
+            st.warning("Set the App URL first — without it the QR codes open nothing.")
+        else:
+            try:
+                pdf = qr.labels_pdf(rows.to_dict("records"), base)
+                st.download_button("⬇ Download QR sheet (PDF)", pdf,
+                                   file_name=f"qr_labels_{reports.stamp()}.pdf",
+                                   mime="application/pdf", type="primary")
+            except ModuleNotFoundError:
+                st.error("The server doesn't have the 'qrcode' package yet. Add "
+                         "`qrcode[pil]` to requirements.txt and redeploy.")
+
+
 def page_delivery() -> None:
     st.header("Delivery")
     perm = st.session_state.get("permission", "")
@@ -1823,6 +2145,7 @@ GATED_TABS = {
     "Targets & plan": {"Targets & plan": "Targets"},
     "Update progress": {"Fit-Up updates": "Update Fit-Up",
                         "Welding updates": "Update Welding"},
+    "Scan & update (QR)": {"Scan & register field workers": "Field Scan"},
     "Delivery": {"Painting delivery": "Painting Delivery",
                  "Site delivery": "Site Delivery"},
     "Manpower": {"Manpower entry": "Manpower Report"},
@@ -2152,6 +2475,9 @@ def page_manpower() -> None:
     "Targets & plan": page_targets,
     "Work order summary": page_wo_summary,
     "Update progress": page_update,
+    "Scan & update": page_scan,
+    "Field workers": page_field_workers,
+    "QR labels": page_qr_labels,
     "Delivery": page_delivery,
     "Spools": page_spools,
     "Classify & export": page_reports,
