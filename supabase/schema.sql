@@ -100,6 +100,7 @@ create table if not exists public.spools (
     irn_date                 text,
     irn_report_no            text,
     paint_system             text,
+    paint_status             text,               -- Yes | No  (needs painting?)
     pwht                     text,
     fitup_date               text,
     welding_date             text,

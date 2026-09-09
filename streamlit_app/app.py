@@ -1366,7 +1366,7 @@ def page_spools() -> None:
         f"""
         SELECT id, wo_no, batch_no, iso_dwg_no, dwg_spool_no, joint_no, joint_size,
                area, system_no, test_pack_no, shop_field, status,
-               fitup_date, welding_date, painting_date, delivery_date,
+               fitup_date, welding_date, paint_status, painting_date, delivery_date,
                site_delivery_date, workable
         FROM spools {clause}
         ORDER BY iso_dwg_no, dwg_spool_no, joint_no
