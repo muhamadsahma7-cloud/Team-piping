@@ -718,6 +718,7 @@ def page_overview() -> None:
                    round(coalesce(sum(joint_size) FILTER (
                        WHERE welding_date ~ '{_ISO}' AND substr(welding_date,1,10) <= :asof),0),2) AS welding_di
             FROM spools
+            WHERE shop_field='S'
             GROUP BY 1 ORDER BY dia_inch DESC
             """,
             {"asof": asof.isoformat()}, ttl=30,
@@ -729,6 +730,7 @@ def page_overview() -> None:
                        bool_and(coalesce(welding_date ~ '{_ISO}'
                          AND substr(welding_date,1,10) <= :asof, false)) AS welded
                 FROM spools
+                WHERE shop_field='S'
                 GROUP BY coalesce(nullif(trim({dim}::text),''),'(blank)'),
                          iso_dwg_no, line_no, iso_run_no, dwg_spool_no
             )
@@ -754,6 +756,8 @@ def page_overview() -> None:
 
     _mny = ("dia_inch", "fitup_di", "fitup_bal", "welding_di", "welding_bal")
     st.subheader("Breakdown")
+    st.caption("Shop spools only · `spool_done` = every joint welded by the as-of date "
+               "(ties to *Total completed spools* above).")
     t1, t2 = st.tabs(["By batch no", "By area"])
     with t1:
         show_table(breakdown("batch_no"), "progress_by_batch",
