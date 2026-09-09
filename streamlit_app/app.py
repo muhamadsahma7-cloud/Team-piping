@@ -209,15 +209,17 @@ div[data-testid="stMetric"] {
 }
 div[data-testid="stMetric"] label p { color:#94a3b8; font-weight:500; }
 /* never clip / ellipsis a metric label — let it wrap to full text */
-div[data-testid="stMetric"] label,
-div[data-testid="stMetricLabel"],
-div[data-testid="stMetricLabel"] *,
-div[data-testid="stMetricValue"],
-div[data-testid="stMetricValue"] * {
+[data-testid="stMetric"] label,
+[data-testid="stMetric"] label *,
+[data-testid="stMetricLabel"],
+[data-testid="stMetricLabel"] *,
+[data-testid="stMetricValue"],
+[data-testid="stMetricValue"] * {
   white-space:normal !important; overflow:visible !important;
   text-overflow:clip !important; max-width:none !important;
+  -webkit-line-clamp:unset !important;
 }
-div[data-testid="stMetricLabel"] p { font-size:.74rem; line-height:1.25; }
+[data-testid="stMetricLabel"] p { font-size:.74rem; line-height:1.25; }
 .stButton>button, .stDownloadButton>button, .stForm button {
   border-radius:9px; font-weight:600;
 }
@@ -684,22 +686,23 @@ def page_overview() -> None:
     wis = int(s["wait_irn_site"] or 0)
     psp = int(s["painting_spools"] or 0)
     pct = lambda n: (f"{n / tsp * 100:.0f}%" if tsp else None)
-    r4 = st.columns(6)
-    r4[0].metric("Total pipe spools", f"{tsp:,}", border=True)
-    r4[1].metric("Total completed spools", f"{csp:,}", pct(csp),
-                 delta_color="off", border=True)
-    r4[2].metric("Waiting QC/IRN → painting", f"{wip:,}", pct(wip),
-                 delta_color="off", border=True,
-                 help="Welded, needs painting (paint status = Yes), no IRN yet.")
-    r4[3].metric("Waiting QC/IRN → site", f"{wis:,}", pct(wis),
-                 delta_color="off", border=True,
-                 help="Welded, no painting required (paint status ≠ Yes), no IRN yet.")
-    r4[4].metric("Delivered to painting shop", f"{psp:,}", pct(psp),
-                 delta_color="off", border=True,
-                 help="Spools with a painting delivery date (delivery_date).")
-    r4[5].metric("Total delivered spools", f"{dsp:,}", pct(dsp),
-                 delta_color="off", border=True,
-                 help="Spools with a site delivery date (site_delivery_date).")
+    a = st.columns(3)
+    a[0].metric("Total pipe spools", f"{tsp:,}", border=True)
+    a[1].metric("Total completed spools", f"{csp:,}", pct(csp),
+                delta_color="off", border=True)
+    a[2].metric("Total spool waiting for QC IRN — painting", f"{wip:,}", pct(wip),
+                delta_color="off", border=True,
+                help="Welded, needs painting (paint status = Yes), no IRN yet.")
+    b = st.columns(3)
+    b[0].metric("Total spool waiting for QC IRN — site delivery", f"{wis:,}", pct(wis),
+                delta_color="off", border=True,
+                help="Welded, no painting required (paint status ≠ Yes), no IRN yet.")
+    b[1].metric("Total spools delivered to painting shop", f"{psp:,}", pct(psp),
+                delta_color="off", border=True,
+                help="Spools with a painting delivery date (delivery_date).")
+    b[2].metric("Total spools delivered to site", f"{dsp:,}", pct(dsp),
+                delta_color="off", border=True,
+                help="Spools with a site delivery date (site_delivery_date).")
 
     st.subheader("Cumulative S-curve (shop dia-inch)")
     sc = db.query(
