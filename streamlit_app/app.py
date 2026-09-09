@@ -607,7 +607,9 @@ SELECT
      WHERE mr.total_welders IS NOT NULL AND mr.total_welders>0)                               AS avg_welding_welder,
   (SELECT coalesce(sum(joint_size),0) FROM spools
      WHERE shop_field='S' AND site_delivery_date ~ '{_ISO}'
-       AND substr(site_delivery_date,1,10) <= :asof)                                          AS delivered_di
+       AND substr(site_delivery_date,1,10) <= :asof)                                          AS delivered_di,
+  (SELECT coalesce(sum(joint_size),0) FROM spools
+     WHERE shop_field='S' AND lower(coalesce(status,''))='hold')                              AS hold_di
 """
 
 
@@ -656,12 +658,14 @@ def page_overview() -> None:
                     text=f"{label}: {val:,.2f} / {shop_di:,.2f}  ({pct*100:.1f}%)")
 
     st.subheader("Key figures")
-    r1 = st.columns(5)
+    r1 = st.columns(6)
     r1[0].metric("Total shop dia-inch", f(s["shop_di"]), border=True)
     r1[1].metric("Total field dia-inch", f(s["field_di"]), border=True)
-    r1[2].metric("Work order issued", f"{int(s['wo_issued'] or 0):,}", border=True)
-    r1[3].metric("WO total dia-inch", f(s["wo_total_di"]), border=True)
-    r1[4].metric("WO fit-up balance", f(s["wo_fitup_bal"]), border=True)
+    r1[2].metric("Hold dia-inch", f(s["hold_di"]), border=True,
+                 help="Shop joint_size where status = hold.")
+    r1[3].metric("Work order issued", f"{int(s['wo_issued'] or 0):,}", border=True)
+    r1[4].metric("WO total dia-inch", f(s["wo_total_di"]), border=True)
+    r1[5].metric("WO fit-up balance", f(s["wo_fitup_bal"]), border=True)
 
     day_lbl = "Today's" if is_today else asof.isoformat()
     r2 = st.columns(5)
