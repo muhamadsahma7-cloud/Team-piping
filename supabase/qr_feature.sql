@@ -35,10 +35,17 @@ create unique index if not exists uq_field_workers_name_trade
 -- ---------------------------------------------------------------------
 -- field_updates - one row per (joint, activity); the UNIQUE index is
 -- what makes "cannot double entry" race-safe.
+--
+-- spool_id is a soft link (no FK) on purpose: the Data-admin Excel
+-- re-import does TRUNCATE public.spools RESTART IDENTITY, which a FK
+-- would block and which renumbers ids anyway. qr_id is copied in as a
+-- stable handle - the app re-links printed QR codes by natural key on
+-- every re-import, so field_updates.qr_id keeps pointing at the joint.
 -- ---------------------------------------------------------------------
 create table if not exists public.field_updates (
     id           bigint generated always as identity primary key,
-    spool_id     bigint not null references public.spools (id),
+    spool_id     bigint not null,
+    qr_id        text,
     activity     text not null check (activity in ('Fit-Up', 'Welding')),
     work_date    text not null,               -- 'YYYY-MM-DD' also written to spools
     worker_id    bigint references public.field_workers (id),
@@ -48,6 +55,7 @@ create table if not exists public.field_updates (
     app_user     text,
     recorded_at  timestamptz not null default now()
 );
+alter table public.field_updates add column if not exists qr_id text;
 create unique index if not exists uq_field_updates_joint_activity
     on public.field_updates (spool_id, activity);
 create index if not exists idx_field_updates_recorded_at

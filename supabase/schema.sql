@@ -276,7 +276,8 @@ create unique index if not exists uq_field_workers_name_trade
 
 create table if not exists public.field_updates (
     id           bigint generated always as identity primary key,
-    spool_id     bigint not null references public.spools (id),
+    spool_id     bigint not null,             -- soft link (Excel re-import TRUNCATEs spools)
+    qr_id        text,                         -- stable handle, re-linked by natural key
     activity     text not null check (activity in ('Fit-Up', 'Welding')),
     work_date    text not null,
     worker_id    bigint references public.field_workers (id),
@@ -286,6 +287,7 @@ create table if not exists public.field_updates (
     app_user     text,
     recorded_at  timestamptz not null default now()
 );
+alter table public.field_updates add column if not exists qr_id text;
 create unique index if not exists uq_field_updates_joint_activity
     on public.field_updates (spool_id, activity);
 create index if not exists idx_field_updates_recorded_at

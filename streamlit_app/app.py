@@ -1547,12 +1547,12 @@ def page_scan() -> None:
         sql = (
             f"WITH upd AS ( UPDATE spools SET {col} = :d "
             f"WHERE id = :s AND coalesce({col},'') = '' {seq} RETURNING id ) "
-            "INSERT INTO field_updates (spool_id, activity, work_date, worker_id, "
-            "worker_name, stamp_no, source, app_user) "
-            "SELECT :s, :a, :d, :wid, :wn, :sn, 'qr', :au FROM upd"
+            "INSERT INTO field_updates (spool_id, qr_id, activity, work_date, "
+            "worker_id, worker_name, stamp_no, source, app_user) "
+            "SELECT :s, :qr, :a, :d, :wid, :wn, :sn, 'qr', :au FROM upd"
         )
         params = {
-            "d": wd.isoformat(), "s": sid, "a": activity,
+            "d": wd.isoformat(), "s": sid, "qr": code, "a": activity,
             "wid": int(wrow["id"]), "wn": who,
             "sn": (wrow["stamp_no"] or None), "au": st.session_state.get("user"),
         }
@@ -2401,13 +2401,37 @@ def page_admin() -> None:
             f"with {len(clean):,} rows from this file"
         )
         if st.button("🚚 Replace spools now", type="primary", disabled=not confirm):
+            has_qr = not db.query(
+                "SELECT 1 FROM information_schema.columns WHERE table_schema='public' "
+                "AND table_name='spools' AND column_name='qr_id'", ttl=0,
+            ).empty
+            relinked = 0
             with eng.begin() as cx:
                 if auto_snap:
                     sname = _SNAP_PREFIX + pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
                     cx.execute(_t(f'CREATE TABLE public."{sname}" AS SELECT * FROM public.spools'))
+                if has_qr:
+                    # carry printed QR codes over the re-import, matched by joint key
+                    cx.execute(_t("""
+                        CREATE TEMP TABLE _qr_keep ON COMMIT DROP AS
+                        SELECT qr_id, iso_dwg_no, line_no, iso_run_no,
+                               dwg_spool_no, joint_no
+                        FROM public.spools WHERE coalesce(qr_id,'') <> ''
+                    """))
                 cx.execute(_t("TRUNCATE public.spools RESTART IDENTITY"))
                 clean.to_sql("spools", cx, if_exists="append", index=False,
                              chunksize=1000, method="multi")
+                if has_qr:
+                    relinked = cx.execute(_t("""
+                        UPDATE public.spools s SET qr_id = k.qr_id
+                        FROM _qr_keep k
+                        WHERE s.qr_id IS NULL
+                          AND coalesce(s.iso_dwg_no,'')   = coalesce(k.iso_dwg_no,'')
+                          AND coalesce(s.line_no,'')      = coalesce(k.line_no,'')
+                          AND coalesce(s.iso_run_no,'')   = coalesce(k.iso_run_no,'')
+                          AND coalesce(s.dwg_spool_no,'') = coalesce(k.dwg_spool_no,'')
+                          AND coalesce(s.joint_no,'')     = coalesce(k.joint_no,'')
+                    """)).rowcount
             try:
                 db.execute("INSERT INTO user_log (username) VALUES (:u)",
                            {"u": f"{st.session_state['user']} [excel import {len(clean)} rows]"})
@@ -2415,7 +2439,8 @@ def page_admin() -> None:
                 pass
             st.cache_data.clear()
             st.success(f"Imported {len(clean):,} rows into spools"
-                       + (f"; snapshot `{sname}` kept." if auto_snap else "."))
+                       + (f"; snapshot `{sname}` kept." if auto_snap else ".")
+                       + (f" Re-linked {relinked:,} QR code(s)." if relinked else ""))
 
 
 def page_manpower() -> None:
