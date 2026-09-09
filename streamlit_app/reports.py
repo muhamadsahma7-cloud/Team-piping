@@ -168,9 +168,23 @@ def build_classified_xlsx(df: pd.DataFrame) -> bytes:
         | df_final["Spool Status"].isin(["Ready to Release-Straight Pipe", "Sent to Site"])
     ]
     status_summary = summarize(classified)
-    shop_field_summary = (
-        classified.groupby("shop_field").agg(Total_DiaInch=("joint_size", "sum")).reset_index()
-    )
+
+    sf = (classified.groupby("shop_field")
+          .agg(**{"Pipe Spools": ("spool_key", "nunique"),
+                  "Joints": ("joint_no", "count"),
+                  "Dia-Inch": ("joint_size", "sum")})
+          .reset_index())
+    sf["shop_field"] = (sf["shop_field"].map({"S": "Shop", "F": "Field"})
+                        .fillna(sf["shop_field"]).fillna("(blank)"))
+    sf = sf.rename(columns={"shop_field": "Location"})
+    _td = sf["Dia-Inch"].sum()
+    sf["% Dia-Inch"] = (sf["Dia-Inch"] / _td * 100).round(1) if _td else 0.0
+    sf["Dia-Inch"] = sf["Dia-Inch"].round(2)
+    _lr = {"Shop": 0, "Field": 1}
+    sf = (sf.sort_values("Location", key=lambda c: c.map(lambda x: _lr.get(x, 9)))
+            .reset_index(drop=True)
+            [["Location", "Pipe Spools", "Joints", "Dia-Inch", "% Dia-Inch"]])
+
     _pss_cols = ["spool_key", "wo_no", "batch_no", "zone", "material_group", "iso_dwg_no",
                  "line_no", "dwg_spool_no", "iso_run_no", "paint_system", "paint_status",
                  "Spool Status"]
@@ -178,36 +192,40 @@ def build_classified_xlsx(df: pd.DataFrame) -> bytes:
         [c for c in _pss_cols if c in df_shop.columns]
     ]
 
+    gen = f"Generated {datetime.now(MYT):%Y-%m-%d %H:%M} MYT"
+    manual = {"Summary", "Shop and Field"}
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df_final.to_excel(writer, index=False, sheet_name="All Spools")
         pipe_spool_summary.to_excel(writer, index=False, sheet_name="Pipe Spool Summary")
-        shop_field_summary.to_excel(writer, index=False, sheet_name="Shop and Field")
         for status in _STATUS_ORDER:
             part = df_shop[df_shop["Spool Status"] == status]
             if not part.empty:
                 part.to_excel(writer, index=False, sheet_name=status[:31])
         wb = writer.book
-        _write_summary_sheet(wb, status_summary)      # proper, formatted, tab 1
+        _write_report_sheet(wb, "Summary", "CLASSIFIED SPOOLS  —  SUMMARY",
+                            gen + "   ·   shop spools plus straight pipe / sent-to-site",
+                            status_summary, index=0, color_key="Spool Status")
+        _write_report_sheet(wb, "Shop and Field", "SHOP vs FIELD  —  BREAKDOWN",
+                            gen + "   ·   all spools by fabrication location",
+                            sf, index=1)
         for name in wb.sheetnames:
-            if name != "Summary":
+            if name not in manual:
                 _format_sheet(wb[name])
     return buf.getvalue()
 
 
-def _write_summary_sheet(wb, summ: pd.DataFrame) -> None:
-    """Formatted Summary tab: title, colour-keyed status rows, TOTAL row."""
-    ws = wb.create_sheet("Summary", 0)
+def _write_report_sheet(wb, sheet: str, title: str, subtitle: str, dfr: pd.DataFrame,
+                        *, index: int = 0, color_key: str | None = None) -> None:
+    """A titled, header-banded sheet with a TOTAL row and number formats."""
+    ws = wb.create_sheet(sheet, index)
     thin = Side(border_style="thin", color="BFBFBF")
     box = Border(top=thin, bottom=thin, left=thin, right=thin)
-    headers = list(summ.columns)
-    HR = 4                                            # header row
+    headers = list(dfr.columns)
+    HR = 4
 
-    ws["A1"] = "CLASSIFIED SPOOLS  —  SUMMARY"
-    ws["A1"].font = Font(bold=True, size=14, color="1F4E79")
-    ws["A2"] = (f"Generated {datetime.now(MYT):%Y-%m-%d %H:%M} MYT   ·   "
-                "shop spools plus straight pipe / sent-to-site")
-    ws["A2"].font = Font(italic=True, size=9, color="808080")
+    ws.cell(1, 1, title).font = Font(bold=True, size=14, color="1F4E79")
+    ws.cell(2, 1, subtitle).font = Font(italic=True, size=9, color="808080")
 
     for j, h in enumerate(headers, 1):
         c = ws.cell(HR, j, h)
@@ -216,20 +234,24 @@ def _write_summary_sheet(wb, summ: pd.DataFrame) -> None:
         c.alignment = Alignment(horizontal="center", vertical="center")
         c.border = box
 
+    def _fmt(cell, h):
+        if h == "Dia-Inch":
+            cell.number_format = "#,##0.00"
+        elif h.startswith("%"):
+            cell.number_format = '0.0"%"'
+        elif h in ("Pipe Spools", "Joints"):
+            cell.number_format = "#,##0"
+
     r = HR + 1
-    for _, row in summ.iterrows():
+    for _, row in dfr.iterrows():
         for j, h in enumerate(headers, 1):
             c = ws.cell(r, j, row[h])
             c.border = box
-            c.alignment = Alignment(horizontal="left" if h == "Spool Status" else "center")
-            if h == "Dia-Inch":
-                c.number_format = "#,##0.00"
-            elif h.startswith("%"):
-                c.number_format = '0.0"%"'
-            elif h in ("Pipe Spools", "Joints"):
-                c.number_format = "#,##0"
-        code = _FILL_COLORS.get(row["Spool Status"], "FFFFFF")
-        ws.cell(r, 1).fill = PatternFill("solid", start_color=code)
+            c.alignment = Alignment(horizontal="left" if j == 1 else "center")
+            _fmt(c, h)
+        if color_key and color_key in dfr.columns:
+            code = _FILL_COLORS.get(row[color_key], "FFFFFF")
+            ws.cell(r, 1).fill = PatternFill("solid", start_color=code)
         r += 1
 
     ws.cell(r, 1, "TOTAL").font = Font(bold=True)
@@ -249,7 +271,7 @@ def _write_summary_sheet(wb, summ: pd.DataFrame) -> None:
 
     for j, h in enumerate(headers, 1):
         ws.column_dimensions[ws.cell(HR, j).column_letter].width = \
-            max(len(h) + 4, 22 if h == "Spool Status" else 13)
+            max(len(str(h)) + 4, 22 if j == 1 else 13)
     ws.freeze_panes = f"A{HR + 1}"
 
 
