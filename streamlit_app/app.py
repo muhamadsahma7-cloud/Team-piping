@@ -1204,13 +1204,37 @@ def page_update() -> None:
     if not spool:
         return
 
+    key = {"i": iso, "l": line, "p": pageno, "s": spool}
+    info = db.query(
+        f"""SELECT string_agg(DISTINCT nullif(trim(wo_no),''), ', ')      AS wo_no,
+                   string_agg(DISTINCT nullif(trim(batch_no),''), ', ')    AS batch_no,
+                   string_agg(DISTINCT nullif(trim(area),''), ', ')        AS area,
+                   string_agg(DISTINCT nullif(trim(system_no),''), ', ')   AS system_no,
+                   string_agg(DISTINCT nullif(trim(test_pack_no),''), ', ') AS test_pack_no,
+                   string_agg(DISTINCT nullif(trim(material_group),''), ', ') AS material_group,
+                   string_agg(DISTINCT nullif(trim(status),''), ', ')      AS status,
+                   count(*) AS joints
+            {base} AND iso_dwg_no=:i AND line_no=:l AND iso_run_no=:p AND dwg_spool_no=:s""",
+        key, ttl=0,
+    ).iloc[0]
+    st.markdown(
+        f"**WO no:** {info['wo_no'] or '—'} &nbsp;·&nbsp; "
+        f"**Batch:** {info['batch_no'] or '—'} &nbsp;·&nbsp; "
+        f"**Area:** {info['area'] or '—'} &nbsp;·&nbsp; "
+        f"**System:** {info['system_no'] or '—'} &nbsp;·&nbsp; "
+        f"**Test pack:** {info['test_pack_no'] or '—'} &nbsp;·&nbsp; "
+        f"**Material:** {info['material_group'] or '—'} &nbsp;·&nbsp; "
+        f"**Status:** {info['status'] or '—'} &nbsp;·&nbsp; "
+        f"**Joints:** {int(info['joints'])}"
+    )
+
     joints = db.query(
         f"""SELECT joint_no, joint_size, item_1, sch_rating_1, item_2, sch_rating_2,
                    coalesce(fitup_date,'')   AS fitup_date,
                    coalesce(welding_date,'') AS welding_date
             {base} AND iso_dwg_no=:i AND line_no=:l AND iso_run_no=:p AND dwg_spool_no=:s
             ORDER BY joint_no""",
-        {"i": iso, "l": line, "p": pageno, "s": spool}, ttl=0,
+        key, ttl=0,
     )
     if joints.empty:
         st.info("No joints for this selection.")
