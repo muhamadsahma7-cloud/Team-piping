@@ -1513,6 +1513,43 @@ def page_update() -> None:
 #   * a per-joint guarded UPDATE + UNIQUE(qr_id, joint_no, activity) on
 #     field_updates make a repeat a no-op ("cannot double entry").
 # =====================================================================
+@st.cache_resource
+def _ensure_qr_schema() -> bool:
+    """Idempotent DDL so the QR feature works even if supabase/qr_feature.sql
+    wasn't (re-)run. Runs once per server process. Safe to fail silently."""
+    stmts = [
+        "ALTER TABLE public.spools ADD COLUMN IF NOT EXISTS qr_id text",
+        "DROP INDEX IF EXISTS public.uq_spools_qr_id",          # was UNIQUE in v1
+        "CREATE INDEX IF NOT EXISTS idx_spools_qr_id ON public.spools (qr_id)",
+        """CREATE TABLE IF NOT EXISTS public.field_workers (
+             id bigint generated always as identity primary key,
+             name text not null, trade text not null,
+             stamp_no text, phone text, pin text not null,
+             active boolean not null default true,
+             registered_at timestamptz not null default now())""",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_field_workers_name_trade "
+        "ON public.field_workers (lower(name), trade)",
+        """CREATE TABLE IF NOT EXISTS public.field_updates (
+             id bigint generated always as identity primary key,
+             spool_id bigint not null, qr_id text, joint_no text,
+             activity text not null, work_date text not null,
+             worker_id bigint, worker_name text, stamp_no text,
+             source text not null default 'qr', app_user text,
+             recorded_at timestamptz not null default now())""",
+        "ALTER TABLE public.field_updates ADD COLUMN IF NOT EXISTS qr_id text",
+        "ALTER TABLE public.field_updates ADD COLUMN IF NOT EXISTS joint_no text",
+        "DROP INDEX IF EXISTS public.uq_field_updates_joint_activity",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_field_updates_joint_activity "
+        "ON public.field_updates (qr_id, joint_no, activity) WHERE qr_id IS NOT NULL",
+    ]
+    for s in stmts:
+        try:
+            db.execute(s)
+        except Exception:
+            pass
+    return True
+
+
 def _field_workers(trade_needed: str) -> pd.DataFrame:
     return db.query(
         """SELECT id, name, trade, coalesce(stamp_no,'') AS stamp_no, pin
@@ -1585,6 +1622,7 @@ def _scan_history(code: str) -> None:
 
 def page_scan() -> None:
     st.header("📲 Scan & update")
+    _ensure_qr_schema()
 
     code = (st.query_params.get("scan")
             or st.session_state.get("pending_scan") or "").strip()
@@ -1736,6 +1774,7 @@ def page_scan() -> None:
 
 def page_field_workers() -> None:
     st.header("🦺 Field workers")
+    _ensure_qr_schema()
     st.caption("The shop-floor roster. Fitters and welders can also self-register "
                "from the Scan & update screen; the name + PIN signs every scan.")
     is_admin = st.session_state.get("permission", "") == "all"
@@ -1790,6 +1829,7 @@ _SPOOL_KEY = ("iso_dwg_no", "line_no", "iso_run_no", "dwg_spool_no")
 
 def page_qr_labels() -> None:
     st.header("🏷️ QR labels")
+    _ensure_qr_schema()
     st.caption("One QR per spool (ISO dwg · line · page · dwg spool). The label "
                "also prints WO / batch / material. Scanning it lists every joint "
                "on that spool to update.")
@@ -1897,12 +1937,20 @@ def page_qr_labels() -> None:
         )
         if not groups.empty:
             cond = " AND ".join(f"coalesce({c},'') = :{c}" for c in _SPOOL_KEY)
-            db.execute_many(
-                f"UPDATE spools SET qr_id = :qc "
-                f"WHERE shop_field='S' AND coalesce(qr_id,'')='' AND {cond}",
-                [{**{c: row[c] for c in _SPOOL_KEY}, "qc": qr.new_code()}
-                 for _, row in groups.iterrows()],
-            )
+            try:
+                db.execute_many(
+                    f"UPDATE spools SET qr_id = :qc "
+                    f"WHERE shop_field='S' AND coalesce(qr_id,'')='' AND {cond}",
+                    [{**{c: row[c] for c in _SPOOL_KEY}, "qc": qr.new_code()}
+                     for _, row in groups.iterrows()],
+                )
+            except Exception as e:
+                if "unique" in str(e).lower() or "uq_spools_qr_id" in str(e):
+                    st.error("An old unique index on qr_id is still on the "
+                             "database. Re-run **supabase/qr_feature.sql** in "
+                             "Supabase, then try again.")
+                    return
+                raise
         st.cache_data.clear()
         st.success(f"Coded {len(groups)} new spool(s)"
                    + (f", topped up {filled} joint(s)." if filled else "."))
@@ -1914,6 +1962,10 @@ def page_qr_labels() -> None:
                    "and assigns one fresh code per spool. Scan history stays "
                    "readable but stops linking to the joint. Re-print afterwards.")
         if st.button("♻ Wipe & re-code all shop spools"):
+            try:
+                db.execute("DROP INDEX IF EXISTS public.uq_spools_qr_id")
+            except Exception:
+                pass
             db.write("UPDATE spools SET qr_id = NULL WHERE shop_field='S'")
             fresh = db.query(
                 f"""SELECT {", ".join(f"coalesce({c},'') AS {c}" for c in _SPOOL_KEY)}
