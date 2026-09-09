@@ -2,19 +2,22 @@
 --  Team Piping - QR scan progress update  (draft, 2026-09-09)
 --
 --  Adds:
---    spools.qr_id          - opaque per-joint code embedded in the QR label
+--    spools.qr_id          - one code per SPOOL (shared by all its joint
+--                            rows): work order / batch / ISO dwg / line /
+--                            page / dwg spool. Printed as the QR label.
 --    field_workers         - self-registered fitters / welders (name + PIN)
 --    field_updates         - append-only audit of every QR fit-up / welding
---                            scan; UNIQUE(spool_id, activity) blocks double
---                            entry at the database level.
+--                            scan; UNIQUE(qr_id, joint_no, activity) blocks
+--                            double entry at the database level (per joint).
 --
 --  Apply:  Supabase Dashboard -> SQL Editor -> paste -> Run.  Safe to re-run.
 -- =====================================================================
 
--- opaque code per joint (row) - printed as the QR, stable across re-imports
+-- one code per spool, written onto every joint row of that spool. On a
+-- scan the app lists the spool's joints and the worker ticks which ones.
 alter table public.spools add column if not exists qr_id text;
-create unique index if not exists uq_spools_qr_id
-    on public.spools (qr_id) where qr_id is not null;
+drop index if exists public.uq_spools_qr_id;          -- was unique in the first draft
+create index if not exists idx_spools_qr_id on public.spools (qr_id);
 
 -- ---------------------------------------------------------------------
 -- field_workers - a fitter / welder registers his own name once
@@ -46,6 +49,7 @@ create table if not exists public.field_updates (
     id           bigint generated always as identity primary key,
     spool_id     bigint not null,
     qr_id        text,
+    joint_no     text,
     activity     text not null check (activity in ('Fit-Up', 'Welding')),
     work_date    text not null,               -- 'YYYY-MM-DD' also written to spools
     worker_id    bigint references public.field_workers (id),
@@ -56,12 +60,15 @@ create table if not exists public.field_updates (
     recorded_at  timestamptz not null default now()
 );
 alter table public.field_updates add column if not exists qr_id text;
+alter table public.field_updates add column if not exists joint_no text;
+-- one Fit-Up + one Welding per joint of a spool = the double-entry guard
+drop index if exists public.uq_field_updates_joint_activity;
 create unique index if not exists uq_field_updates_joint_activity
-    on public.field_updates (spool_id, activity);
+    on public.field_updates (qr_id, joint_no, activity) where qr_id is not null;
 create index if not exists idx_field_updates_recorded_at
     on public.field_updates (recorded_at desc);
-create index if not exists idx_field_updates_spool
-    on public.field_updates (spool_id);
+create index if not exists idx_field_updates_qr
+    on public.field_updates (qr_id);
 
 alter table public.field_workers enable row level security;
 alter table public.field_updates enable row level security;

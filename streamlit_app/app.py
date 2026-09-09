@@ -1443,12 +1443,13 @@ def page_update() -> None:
 
 # =====================================================================
 # QR scan -> update progress   (draft)
-#   * a fitter / welder registers his name + PIN once  (Field workers)
-#   * the office prints a QR per shop joint             (QR labels)
-#   * on the floor he scans the joint, picks Fit-Up / Welding, keys his
-#     PIN, confirms -> the date lands on spools + an audit row.
-#   * UNIQUE(spool_id, activity) on field_updates + a guarded UPDATE make
-#     a second scan a no-op ("cannot double entry").
+#   * a fitter / welder registers his name + PIN once   (Field workers)
+#   * the office prints one QR per SPOOL                 (QR labels)
+#     - work order / batch / ISO dwg / line / page / dwg spool / material
+#   * on the floor he scans the spool, ticks the joints he just did,
+#     picks Fit-Up / Welding, keys his PIN, confirms.
+#   * a per-joint guarded UPDATE + UNIQUE(qr_id, joint_no, activity) on
+#     field_updates make a repeat a no-op ("cannot double entry").
 # =====================================================================
 def _field_workers(trade_needed: str) -> pd.DataFrame:
     return db.query(
@@ -1460,132 +1461,145 @@ def _field_workers(trade_needed: str) -> pd.DataFrame:
     )
 
 
-def page_scan() -> None:
-    st.header("📲 Scan & update")
-
-    code = (st.query_params.get("scan") or "").strip()
-    code = st.text_input("Joint QR code", value=code,
-                         help="Scanned automatically from the phone camera, "
-                              "or type the code printed under the QR.").strip().upper()
-    if not code:
-        st.info("Scan a joint's QR label with your phone camera, or key its code above.")
-        return
-
-    j = db.query(
-        """SELECT id, iso_dwg_no, line_no, iso_run_no, dwg_spool_no, joint_no,
-                  joint_size, wo_no, batch_no,
-                  coalesce(fitup_date,'')   AS fitup_date,
-                  coalesce(welding_date,'') AS welding_date
-             FROM spools WHERE qr_id = :c""",
-        {"c": code}, ttl=0,
-    )
-    if j.empty:
-        st.error(f"No joint carries code **{code}**. Check the label, or ask the "
-                 "office to regenerate it on the **QR labels** page.")
-        return
-    r = j.iloc[0]
-    sid = int(r["id"])
-    try:
-        size_txt = f"{float(r['joint_size']):g}\""
-    except (TypeError, ValueError):
-        size_txt = "—"
-
-    st.markdown(
-        f"### {r['iso_dwg_no'] or '—'} &nbsp;·&nbsp; Spool {r['dwg_spool_no'] or '—'} "
-        f"&nbsp;·&nbsp; Joint {r['joint_no'] or '—'}\n"
-        f"**Line** {r['line_no'] or '—'} &nbsp;·&nbsp; **Page** {r['iso_run_no'] or '—'} "
-        f"&nbsp;·&nbsp; **Size** {size_txt} &nbsp;·&nbsp; "
-        f"**WO** {r['wo_no'] or '—'} &nbsp;·&nbsp; **Batch** {r['batch_no'] or '—'}"
-    )
-    m1, m2 = st.columns(2)
-    m1.metric("Fit-Up", r["fitup_date"] or "not yet")
-    m2.metric("Welding", r["welding_date"] or "not yet")
-
-    fu_done, wd_done = r["fitup_date"] != "", r["welding_date"] != ""
-    opts = ([] if fu_done else ["Fit-Up"]) + (["Welding"] if fu_done and not wd_done else [])
-
-    hist = db.query(
-        """SELECT activity, work_date,
+def _scan_history(code: str) -> None:
+    h = db.query(
+        """SELECT activity,
+                  coalesce(joint_no,'')    AS joint,
+                  work_date,
                   coalesce(worker_name,'') AS worker,
                   coalesce(stamp_no,'')    AS stamp,
                   to_char(recorded_at AT TIME ZONE 'Asia/Kuala_Lumpur',
                           'YYYY-MM-DD HH24:MI') AS recorded
-             FROM field_updates WHERE spool_id = :s ORDER BY recorded_at""",
-        {"s": sid}, ttl=0,
+             FROM field_updates WHERE qr_id = :c
+            ORDER BY recorded_at""",
+        {"c": code}, ttl=0,
+    )
+    if not h.empty:
+        st.caption("Scan history for this spool")
+        st.dataframe(h, use_container_width=True, hide_index=True)
+
+
+def page_scan() -> None:
+    st.header("📲 Scan & update")
+
+    code = (st.query_params.get("scan") or "").strip()
+    code = st.text_input("Spool QR code", value=code,
+                         help="Scanned from the phone camera, or type the code "
+                              "printed under the QR.").strip().upper()
+    if not code:
+        st.info("Scan a spool's QR label with your phone camera, or key its code above.")
+        return
+
+    js = db.query(
+        """SELECT id, joint_no, joint_size,
+                  coalesce(wo_no,'')          AS wo_no,
+                  coalesce(batch_no,'')       AS batch_no,
+                  coalesce(iso_dwg_no,'')     AS iso_dwg_no,
+                  coalesce(line_no,'')        AS line_no,
+                  coalesce(iso_run_no,'')     AS iso_run_no,
+                  coalesce(dwg_spool_no,'')   AS dwg_spool_no,
+                  coalesce(material_group,'') AS material_group,
+                  coalesce(fitup_date,'')     AS fitup_date,
+                  coalesce(welding_date,'')   AS welding_date
+             FROM spools WHERE qr_id = :c
+            ORDER BY joint_no""",
+        {"c": code}, ttl=0,
+    )
+    if js.empty:
+        st.error(f"No spool carries code **{code}**. Check the label, or ask the "
+                 "office to (re)generate it on **QR labels**.")
+        return
+
+    uniq = lambda col: ", ".join(sorted({x for x in js[col] if x})) or "—"
+    st.markdown(
+        f"### Spool {uniq('dwg_spool_no')}\n"
+        f"**WO** {uniq('wo_no')} &nbsp;·&nbsp; **Batch** {uniq('batch_no')} "
+        f"&nbsp;·&nbsp; **ISO** {uniq('iso_dwg_no')} &nbsp;·&nbsp; "
+        f"**Line** {uniq('line_no')} &nbsp;·&nbsp; **Page** {uniq('iso_run_no')} "
+        f"&nbsp;·&nbsp; **Material** {uniq('material_group')}"
     )
 
-    if not opts:
-        st.success("This joint is fully welded — nothing left to record. ✅"
-                   if wd_done else "Nothing to record here.")
-        if not hist.empty:
-            st.caption("Scan history")
-            st.dataframe(hist, use_container_width=True, hide_index=True)
+    n = len(js)
+    m1, m2 = st.columns(2)
+    m1.metric("Fit-Up", f"{int((js['fitup_date'] != '').sum())}/{n}")
+    m2.metric("Welding", f"{int((js['welding_date'] != '').sum())}/{n}")
+
+    view = js[["joint_no", "joint_size", "fitup_date", "welding_date"]].copy()
+    view["joint_size"] = pd.to_numeric(view["joint_size"], errors="coerce")
+    view.columns = ["Joint", "Size", "Fit-Up", "Welding"]
+    st.dataframe(view, use_container_width=True, hide_index=True)
+
+    activity = st.radio("Activity just completed", ["Fit-Up", "Welding"],
+                        horizontal=True)
+    col = "fitup_date" if activity == "Fit-Up" else "welding_date"
+
+    if activity == "Fit-Up":
+        elig = js.loc[js["fitup_date"] == "", "joint_no"].tolist()
+        none_msg = "Every joint on this spool is already fitted-up."
+    else:
+        elig = js.loc[(js["fitup_date"] != "") & (js["welding_date"] == ""),
+                      "joint_no"].tolist()
+        pend = js.loc[js["fitup_date"] == "", "joint_no"].tolist()
+        if pend:
+            st.caption("Fit-Up needed first: " + ", ".join(map(str, pend)))
+        none_msg = "No joints on this spool are waiting for welding."
+
+    if not elig:
+        st.info(none_msg)
+        _scan_history(code)
         return
 
-    activity = st.radio("Activity just completed", opts, horizontal=True)
+    picked = st.multiselect(f"Joints to mark {activity} complete", elig, default=elig)
     trade = "Fitter" if activity == "Fit-Up" else "Welder"
-
     fw = _field_workers(trade)
     if fw.empty:
-        st.warning(f"No registered {trade.lower()} yet — open **Field workers** "
-                   "and register first.")
+        st.warning(f"No registered {trade.lower()} yet — open **Field workers** first.")
         return
-
     who = st.selectbox(f"{trade} name", fw["name"].tolist())
     pin = st.text_input("Your PIN", type="password", max_chars=6)
     wd = st.date_input("Date completed", value=date.today(), format="DD/MM/YYYY")
 
-    if st.button(f"✅ Confirm {activity} complete", type="primary",
-                 use_container_width=True):
+    if st.button(f"✅ Confirm {activity} for {len(picked)} joint(s)", type="primary",
+                 use_container_width=True, disabled=not picked):
         wrow = fw.loc[fw["name"] == who].iloc[0]
         if (pin or "").strip() != str(wrow["pin"]):
             st.error("Wrong PIN.")
             return
 
-        col = "fitup_date" if activity == "Fit-Up" else "welding_date"
         seq = " AND coalesce(fitup_date,'') <> '' " if activity == "Welding" else ""
-        sql = (
+        one = (
             f"WITH upd AS ( UPDATE spools SET {col} = :d "
-            f"WHERE id = :s AND coalesce({col},'') = '' {seq} RETURNING id ) "
-            "INSERT INTO field_updates (spool_id, qr_id, activity, work_date, "
-            "worker_id, worker_name, stamp_no, source, app_user) "
-            "SELECT :s, :qr, :a, :d, :wid, :wn, :sn, 'qr', :au FROM upd"
+            f"WHERE qr_id = :c AND joint_no = :j AND coalesce({col},'') = '' {seq} "
+            "RETURNING id ) "
+            "INSERT INTO field_updates (spool_id, qr_id, joint_no, activity, "
+            "work_date, worker_id, worker_name, stamp_no, source, app_user) "
+            "SELECT id, :c, :j, :a, :d, :wid, :wn, :sn, 'qr', :au FROM upd"
         )
-        params = {
-            "d": wd.isoformat(), "s": sid, "qr": code, "a": activity,
-            "wid": int(wrow["id"]), "wn": who,
-            "sn": (wrow["stamp_no"] or None), "au": st.session_state.get("user"),
-        }
-        try:
-            n = db.write(sql, params)
-        except Exception as e:                      # unique index = already logged
-            msg = str(e).lower()
-            if "uq_field_updates" in msg or "duplicate key" in msg:
-                st.warning(f"{activity} was already recorded for this joint. "
-                           "No double entry.")
-            else:
-                st.error(f"Could not save: {e}")
-            return
-
-        if n == 0:
-            live = db.query(
-                "SELECT coalesce(fitup_date,'') fu, coalesce(welding_date,'') wd "
-                "FROM spools WHERE id = :s", {"s": sid}, ttl=0,
-            ).iloc[0]
-            if activity == "Welding" and live["fu"] == "":
-                st.error("Fit-Up for this joint isn't recorded yet — do Fit-Up first.")
-            else:
-                st.warning(f"{activity} was already recorded for this joint. "
-                           "No double entry.")
-        else:
-            st.success(f"{activity} recorded for joint {r['joint_no']} "
+        b = {"d": wd.isoformat(), "c": code, "a": activity, "wid": int(wrow["id"]),
+             "wn": who, "sn": (wrow["stamp_no"] or None),
+             "au": st.session_state.get("user")}
+        saved, skipped = [], []
+        for j in picked:
+            try:
+                got = db.write(one, {**b, "j": j})
+            except Exception as e:
+                msg = str(e).lower()
+                if "uq_field_updates" in msg or "duplicate key" in msg:
+                    got = 0
+                else:
+                    st.error(f"Joint {j}: {e}")
+                    continue
+            (saved if got else skipped).append(str(j))
+        if saved:
+            st.success(f"{activity} recorded for joint(s) {', '.join(saved)} "
                        f"by {who} on {wd:%d/%m/%Y}. Terima kasih!")
+        if skipped:
+            st.warning("Already recorded, left as-is (no double entry): "
+                       + ", ".join(skipped))
         st.cache_data.clear()
         st.rerun()
 
-    if not hist.empty:
-        st.caption("Scan history")
-        st.dataframe(hist, use_container_width=True, hide_index=True)
+    _scan_history(code)
 
 
 def page_field_workers() -> None:
@@ -1670,11 +1684,16 @@ def page_field_workers() -> None:
                          "Toggle them inactive instead.")
 
 
+# the fields that make one spool = one QR
+_SPOOL_KEY = ("wo_no", "batch_no", "iso_dwg_no", "line_no",
+              "iso_run_no", "dwg_spool_no", "material_group")
+
+
 def page_qr_labels() -> None:
     st.header("🏷️ QR labels")
-    st.caption("Give every shop joint a QR code, then print the sheet and stick "
-               "one label per joint. Scanning it opens this app straight at that "
-               "joint.")
+    st.caption("One QR per spool — work order · batch · ISO dwg · line · page · "
+               "dwg spool · material. Print, stick one on each spool; scanning it "
+               "lists that spool's joints to update.")
 
     settings = db.get_settings()
     saved_url = settings.get("app_url", "")
@@ -1688,55 +1707,100 @@ def page_qr_labels() -> None:
         st.success("Saved.")
         st.rerun()
 
-    miss = int(db.query("SELECT count(*) n FROM spools "
-                        "WHERE shop_field='S' AND coalesce(qr_id,'')=''",
-                        ttl=0).iloc[0]["n"])
-    have = int(db.query("SELECT count(*) n FROM spools "
-                        "WHERE shop_field='S' AND coalesce(qr_id,'')<>''",
-                        ttl=0).iloc[0]["n"])
-    st.write(f"Shop joints with a code: **{have}**  ·  without: **{miss}**")
+    gcond = " AND ".join(f"coalesce(s.{c},'') = coalesce(g.{c},'')" for c in _SPOOL_KEY)
+    grp = ", ".join(_SPOOL_KEY)
 
-    if miss and st.button(f"Assign codes to {miss} joint(s)", type="primary"):
-        ids = db.query("SELECT id FROM spools WHERE shop_field='S' "
-                       "AND coalesce(qr_id,'')='' ORDER BY id", ttl=0)["id"].tolist()
-        db.execute_many(
-            "UPDATE spools SET qr_id = :c WHERE id = :i AND coalesce(qr_id,'')=''",
-            [{"c": qr.new_code(), "i": int(i)} for i in ids],
+    stat = db.query(
+        f"""WITH g AS (
+              SELECT {grp}, bool_or(coalesce(qr_id,'')<>'') AS coded
+                FROM spools WHERE shop_field='S' GROUP BY {grp}
+            )
+            SELECT count(*) FILTER (WHERE coded)          AS have,
+                   count(*) FILTER (WHERE NOT coded)      AS miss,
+                   count(*)                                AS total
+              FROM g""",
+        ttl=0,
+    ).iloc[0]
+    have, miss = int(stat["have"]), int(stat["miss"])
+    # joints that belong to a coded spool but have no code yet (added by re-import)
+    partial = int(db.query(
+        f"""SELECT count(*) n FROM spools s
+             WHERE s.shop_field='S' AND coalesce(s.qr_id,'')=''
+               AND EXISTS (SELECT 1 FROM spools g
+                           WHERE g.shop_field='S' AND coalesce(g.qr_id,'')<>''
+                             AND {gcond})""",
+        ttl=0,
+    ).iloc[0]["n"])
+
+    st.write(f"Spools with a code: **{have}**  ·  without: **{miss}**"
+             + (f"  ·  loose joints to top up: **{partial}**" if partial else ""))
+
+    if (miss or partial) and st.button(
+            f"Assign / top-up codes ({miss} new, {partial} joints)", type="primary"):
+        filled = 0
+        if partial:
+            filled = db.write(
+                f"""UPDATE spools s SET qr_id = x.code
+                      FROM (SELECT {grp}, max(qr_id) AS code FROM spools
+                             WHERE shop_field='S' AND coalesce(qr_id,'')<>''
+                             GROUP BY {grp}) x
+                     WHERE s.shop_field='S' AND coalesce(s.qr_id,'')=''
+                       AND {" AND ".join(f"coalesce(s.{c},'')=coalesce(x.{c},'')" for c in _SPOOL_KEY)}"""
+            )
+        groups = db.query(
+            f"""SELECT {", ".join(f"coalesce({c},'') AS {c}" for c in _SPOOL_KEY)}
+                  FROM spools WHERE shop_field='S'
+                 GROUP BY {grp} HAVING bool_and(coalesce(qr_id,'')='')""",
+            ttl=0,
         )
+        if not groups.empty:
+            cond = " AND ".join(f"coalesce({c},'') = :{c}" for c in _SPOOL_KEY)
+            db.execute_many(
+                f"UPDATE spools SET qr_id = :qc "
+                f"WHERE shop_field='S' AND coalesce(qr_id,'')='' AND {cond}",
+                [{**{c: row[c] for c in _SPOOL_KEY}, "qc": qr.new_code()}
+                 for _, row in groups.iterrows()],
+            )
         st.cache_data.clear()
-        st.success(f"Assigned {len(ids)} codes.")
+        st.success(f"Coded {len(groups)} new spool(s)"
+                   + (f", topped up {filled} joint(s)." if filled else "."))
         st.rerun()
 
     st.divider()
     st.subheader("Print sheet")
-    scope = st.radio("Which joints",
-                     ["By work order", "By batch", "By ISO drawing", "All shop joints"],
+    scope = st.radio("Which spools",
+                     ["By work order", "By batch", "By ISO drawing", "All shop spools"],
                      horizontal=True)
-    filt, val = "", None
+    filt, params = "", {}
     _pick_from = lambda c: db.query(
         f"SELECT DISTINCT {c} v FROM spools WHERE shop_field='S' "
         f"AND coalesce({c},'')<>'' ORDER BY 1", ttl=0)["v"].tolist()
     if scope == "By work order":
-        val = st.selectbox("WO no", _pick_from("wo_no")); filt = "AND wo_no = :v"
+        params = {"v": st.selectbox("WO no", _pick_from("wo_no"))}
+        filt = "AND wo_no = :v"
     elif scope == "By batch":
-        val = st.selectbox("Batch no", _pick_from("batch_no")); filt = "AND batch_no = :v"
+        params = {"v": st.selectbox("Batch no", _pick_from("batch_no"))}
+        filt = "AND batch_no = :v"
     elif scope == "By ISO drawing":
-        val = st.selectbox("ISO DWG NO", _pick_from("iso_dwg_no")); filt = "AND iso_dwg_no = :v"
+        params = {"v": st.selectbox("ISO DWG NO", _pick_from("iso_dwg_no"))}
+        filt = "AND iso_dwg_no = :v"
 
     rows = db.query(
         f"""SELECT qr_id,
-                   iso_dwg_no  AS iso,
-                   line_no     AS line,
-                   dwg_spool_no AS spool,
-                   joint_no    AS joint,
-                   joint_size  AS size
+                   string_agg(DISTINCT nullif(wo_no,''), ', ')          AS wo,
+                   string_agg(DISTINCT nullif(batch_no,''), ', ')       AS batch,
+                   string_agg(DISTINCT nullif(iso_dwg_no,''), ', ')     AS iso,
+                   string_agg(DISTINCT nullif(line_no,''), ', ')        AS line,
+                   string_agg(DISTINCT nullif(iso_run_no,''), ', ')     AS page,
+                   string_agg(DISTINCT nullif(dwg_spool_no,''), ', ')   AS spool,
+                   string_agg(DISTINCT nullif(material_group,''), ', ') AS material,
+                   count(*)                                              AS joints
               FROM spools
              WHERE shop_field='S' AND coalesce(qr_id,'')<>'' {filt}
-             ORDER BY iso_dwg_no, dwg_spool_no, joint_no""",
-        ({"v": val} if val is not None else {}), ttl=0,
+             GROUP BY qr_id
+             ORDER BY 4, 7""",
+        params, ttl=0,
     )
-    if not rows.empty:
-        rows["size"] = pd.to_numeric(rows["size"], errors="coerce")
     st.write(f"{len(rows)} label(s) ready.")
 
     if not rows.empty and st.button("Build PDF sheet", type="primary"):
@@ -2411,11 +2475,11 @@ def page_admin() -> None:
                     sname = _SNAP_PREFIX + pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
                     cx.execute(_t(f'CREATE TABLE public."{sname}" AS SELECT * FROM public.spools'))
                 if has_qr:
-                    # carry printed QR codes over the re-import, matched by joint key
+                    # carry printed spool QR codes over the re-import, by spool key
                     cx.execute(_t("""
                         CREATE TEMP TABLE _qr_keep ON COMMIT DROP AS
-                        SELECT qr_id, iso_dwg_no, line_no, iso_run_no,
-                               dwg_spool_no, joint_no
+                        SELECT DISTINCT wo_no, batch_no, iso_dwg_no, line_no,
+                               iso_run_no, dwg_spool_no, material_group, qr_id
                         FROM public.spools WHERE coalesce(qr_id,'') <> ''
                     """))
                 cx.execute(_t("TRUNCATE public.spools RESTART IDENTITY"))
@@ -2426,11 +2490,13 @@ def page_admin() -> None:
                         UPDATE public.spools s SET qr_id = k.qr_id
                         FROM _qr_keep k
                         WHERE s.qr_id IS NULL
-                          AND coalesce(s.iso_dwg_no,'')   = coalesce(k.iso_dwg_no,'')
-                          AND coalesce(s.line_no,'')      = coalesce(k.line_no,'')
-                          AND coalesce(s.iso_run_no,'')   = coalesce(k.iso_run_no,'')
-                          AND coalesce(s.dwg_spool_no,'') = coalesce(k.dwg_spool_no,'')
-                          AND coalesce(s.joint_no,'')     = coalesce(k.joint_no,'')
+                          AND coalesce(s.wo_no,'')          = coalesce(k.wo_no,'')
+                          AND coalesce(s.batch_no,'')       = coalesce(k.batch_no,'')
+                          AND coalesce(s.iso_dwg_no,'')     = coalesce(k.iso_dwg_no,'')
+                          AND coalesce(s.line_no,'')        = coalesce(k.line_no,'')
+                          AND coalesce(s.iso_run_no,'')     = coalesce(k.iso_run_no,'')
+                          AND coalesce(s.dwg_spool_no,'')   = coalesce(k.dwg_spool_no,'')
+                          AND coalesce(s.material_group,'') = coalesce(k.material_group,'')
                     """)).rowcount
             try:
                 db.execute("INSERT INTO user_log (username) VALUES (:u)",

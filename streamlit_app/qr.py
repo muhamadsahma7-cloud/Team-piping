@@ -44,9 +44,10 @@ def _font(size: int):
 
 def labels_pdf(rows: list[dict], base_url: str, *,
                cols: int = 3, rows_per_page: int = 7) -> bytes:
-    """Print-ready sheet of QR labels.
+    """Print-ready sheet of QR labels, one per spool.
 
-    rows: dicts with keys  qr_id, iso, line, spool, joint, size
+    rows: dicts with keys  qr_id, wo, batch, iso, line, page, spool,
+                           material, joints
     Returns a multi-page PDF (A4 portrait, ~150 dpi).
     """
     import qrcode
@@ -57,8 +58,11 @@ def labels_pdf(rows: list[dict], base_url: str, *,
     cell_w = (PAGE_W - 2 * MARGIN) // cols
     cell_h = (PAGE_H - 2 * MARGIN) // rows_per_page
     per_page = cols * rows_per_page
-    f_big = _font(21)
-    f_small = _font(18)
+    f_big = _font(20)
+    f_small = _font(16)
+
+    def _clip(s: str) -> str:
+        return s if len(s) <= 44 else s[:43] + "…"
 
     pages: list[Image.Image] = []
     page = None
@@ -76,17 +80,24 @@ def labels_pdf(rows: list[dict], base_url: str, *,
 
         qr = qrcode.make(scan_url(base_url, r["qr_id"]),
                          box_size=6, border=1).get_image().convert("RGB")
-        q = min(cell_w - 24, cell_h - 96)
+        q = min(cell_w - 24, cell_h - 150)
         qr = qr.resize((q, q))
-        page.paste(qr, (cx + (cell_w - q) // 2, cy + 12))
+        page.paste(qr, (cx + (cell_w - q) // 2, cy + 10))
 
-        ty = cy + 12 + q + 6
-        line1 = f"{r.get('iso', '')}  {r.get('line', '')}".strip()
-        line2 = (f"Spool {r.get('spool', '')}  ·  Jt {r.get('joint', '')}"
-                 f"  ·  {r.get('size', '')}\"").strip()
-        draw.text((cx + 12, ty), line1[:46], fill="black", font=f_small)
-        draw.text((cx + 12, ty + 22), line2[:46], fill="black", font=f_big)
-        draw.text((cx + 12, ty + 46), r["qr_id"], fill="#666666", font=f_small)
+        ty = cy + 10 + q + 4
+        jn = r.get("joints")
+        caption = [
+            (f"Spool {r.get('spool', '')}"
+             + (f"   ({jn} joints)" if jn else ""), f_big, "black"),
+            (f"WO {r.get('wo', '') or '—'}   ·   Batch {r.get('batch', '') or '—'}",
+             f_small, "black"),
+            (f"{r.get('iso', '')}  {r.get('line', '')}".strip(), f_small, "black"),
+            (f"Pg {r.get('page', '') or '—'}   ·   {r.get('material', '') or '—'}",
+             f_small, "black"),
+            (r["qr_id"], f_small, "#666666"),
+        ]
+        for k, (txt, fnt, colr) in enumerate(caption):
+            draw.text((cx + 12, ty + k * 21), _clip(txt), fill=colr, font=fnt)
 
     if not pages:
         pages = [Image.new("RGB", (PAGE_W, PAGE_H), "white")]

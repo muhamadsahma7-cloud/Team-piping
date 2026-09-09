@@ -252,14 +252,15 @@ create index if not exists idx_qc_wcs_uploaded_at on public.qc_wcs_docs (uploade
 
 -- =====================================================================
 -- QR scan progress update  (see supabase/qr_feature.sql for notes)
---   spools.qr_id   - opaque per-joint code printed as the QR label
+--   spools.qr_id   - one code per SPOOL, shared by all its joint rows;
+--                    printed as the QR label
 --   field_workers  - self-registered fitters / welders (name + PIN)
 --   field_updates  - append-only audit; UNIQUE(spool_id, activity)
---                    blocks double entry at the database level
+--                    blocks double entry at the database level (per joint)
 -- =====================================================================
 alter table public.spools add column if not exists qr_id text;
-create unique index if not exists uq_spools_qr_id
-    on public.spools (qr_id) where qr_id is not null;
+drop index if exists public.uq_spools_qr_id;
+create index if not exists idx_spools_qr_id on public.spools (qr_id);
 
 create table if not exists public.field_workers (
     id            bigint generated always as identity primary key,
@@ -277,7 +278,8 @@ create unique index if not exists uq_field_workers_name_trade
 create table if not exists public.field_updates (
     id           bigint generated always as identity primary key,
     spool_id     bigint not null,             -- soft link (Excel re-import TRUNCATEs spools)
-    qr_id        text,                         -- stable handle, re-linked by natural key
+    qr_id        text,                         -- spool code, stable across re-imports
+    joint_no     text,
     activity     text not null check (activity in ('Fit-Up', 'Welding')),
     work_date    text not null,
     worker_id    bigint references public.field_workers (id),
@@ -288,12 +290,14 @@ create table if not exists public.field_updates (
     recorded_at  timestamptz not null default now()
 );
 alter table public.field_updates add column if not exists qr_id text;
+alter table public.field_updates add column if not exists joint_no text;
+drop index if exists public.uq_field_updates_joint_activity;
 create unique index if not exists uq_field_updates_joint_activity
-    on public.field_updates (spool_id, activity);
+    on public.field_updates (qr_id, joint_no, activity) where qr_id is not null;
 create index if not exists idx_field_updates_recorded_at
     on public.field_updates (recorded_at desc);
-create index if not exists idx_field_updates_spool
-    on public.field_updates (spool_id);
+create index if not exists idx_field_updates_qr
+    on public.field_updates (qr_id);
 
 -- =====================================================================
 -- Row Level Security
