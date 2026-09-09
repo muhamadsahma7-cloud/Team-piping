@@ -1015,15 +1015,84 @@ def page_targets() -> None:
                         f"{r['Delay qty']:,.2f}", r["Status"],
                         delta_color="inverse", border=True)
 
+    # ---- recovery plan : hold the target date, find the catch-up rate ----
+    st.subheader("Recovery plan — hold the target date")
+    if not rep["Status"].eq("BEHIND").any():
+        st.success(f"On or ahead of plan. Nothing to recover — target "
+                   f"{target_date.isoformat()} is achievable at the current pace.")
+    elif remain_wd <= 0:
+        st.error("Target date has passed — no working days left to recover into. "
+                 "Set a new target completion date.")
+    else:
+        crew = db.query(
+            "SELECT total_welders, total_fitters FROM manpower_reports "
+            "WHERE coalesce(trim(date),'')<>'' ORDER BY date DESC LIMIT 1", ttl=60,
+        )
+        cur = {"Fit-up": 0, "Welding": 0}
+        if not crew.empty:
+            cur["Fit-up"] = int(crew.iloc[0]["total_fitters"] or 0)
+            cur["Welding"] = int(crew.iloc[0]["total_welders"] or 0)
+
+        rec_rows, headline = [], []
+        for r in rep.to_dict("records"):
+            disc = r["Discipline"]
+            bal = float(r["Balance"])
+            rate = bal / remain_wd
+            ach = float(r["Achieved/day"])
+            uplift = rate / ach if ach > 0 else float("nan")
+            crew_now = cur[disc]
+            per_head = ach / crew_now if crew_now > 0 else float("nan")
+            crew_need = math.ceil(rate / per_head) if per_head and per_head > 0 else None
+            rec_rows.append({
+                "Discipline": disc,
+                "Balance": round(bal, 2),
+                "Working days left": remain_wd,
+                "Recovery rate/day": round(rate, 2),
+                "Current rate/day": round(ach, 2),
+                "Uplift needed": None if ach == 0 else round(uplift, 2),
+                "Crew now": crew_now or None,
+                "Crew needed": crew_need,
+                "Extra crew": (crew_need - crew_now) if (crew_need is not None and crew_now)
+                              else None,
+            })
+            if r["Status"] == "BEHIND":
+                extra = (f", ~{crew_need} crew (+{crew_need - crew_now})"
+                         if crew_need is not None and crew_now else "")
+                headline.append(f"**{disc}** → {rate:,.1f}/day "
+                                f"({uplift:.1f}× current){extra}")
+        st.markdown(f"To finish by **{target_date.isoformat()}** ({remain_wd} working "
+                    f"days left): " + " &nbsp;·&nbsp; ".join(headline))
+        rr = pd.DataFrame(rec_rows)
+        st.dataframe(
+            rr, use_container_width=True, hide_index=True,
+            column_config={c: st.column_config.NumberColumn(c, format="%.2f")
+                           for c in ("Balance", "Recovery rate/day", "Current rate/day",
+                                     "Uplift needed")},
+        )
+        st.caption("Recovery rate = balance ÷ working days left. Crew needed uses the "
+                   "project's own productivity so far (current rate ÷ current crew).")
+
     end = max(target_date, today)
     idx = pd.date_range(plan_start, end, freq="D")
     for name, (sdf, ppd) in charts.items():
-        with st.expander(f"{name}: planned vs actual cumulative"):
+        with st.expander(f"{name}: planned vs actual vs recovery"):
             act = (sdf.assign(dt=pd.to_datetime(sdf["dt"])).set_index("dt")["di"]
                    .reindex(idx, fill_value=0).cumsum())
             planned = [min(ppd * _wdays(plan_start, min(x.date(), target_date), rest_s, hol_s),
                            scope_di) for x in idx]
-            st.line_chart(pd.DataFrame({"Planned": planned, "Actual": act.values}, index=idx))
+            frame = {"Planned": planned, "Actual": act.values}
+            done_n = float(act.get(pd.Timestamp(today), act.iloc[-1] if len(act) else 0.0))
+            bal_n = max(scope_di - done_n, 0.0)
+            if remain_wd > 0 and bal_n > 0.5 and target_date >= today:
+                rr_n = bal_n / remain_wd
+                frame["Recovery"] = [
+                    None if x.date() < today else
+                    scope_di if x.date() > target_date else
+                    min(done_n + rr_n * _wdays(today + timedelta(days=1), x.date(),
+                                               rest_s, hol_s), scope_di)
+                    for x in idx
+                ]
+            st.line_chart(pd.DataFrame(frame, index=idx))
 
 
 _WO_TOTALS_SQL = """
