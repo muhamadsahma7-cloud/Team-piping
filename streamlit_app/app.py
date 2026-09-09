@@ -68,11 +68,19 @@ def show_table(df: pd.DataFrame, name: str, *, progress: tuple = (),
 
 
 def is_dark() -> bool:
-    """Viewer's active theme (chosen in the ⋮ menu). Default dark."""
+    """Active theme. In-app toggle (theme_choice / ?theme=) wins; else the
+    viewer's Streamlit theme; else light."""
+    c = st.session_state.get("theme_choice")
+    if c is None:
+        qp = st.query_params.get("theme")
+        if qp in ("light", "dark"):
+            c = st.session_state["theme_choice"] = qp
+    if c in ("light", "dark"):
+        return c == "dark"
     try:
         return st.context.theme.type == "dark"
     except Exception:
-        return st.session_state.get("_dark", True)
+        return False
 
 
 def dark_alt(chart):
@@ -151,8 +159,10 @@ PAGE_ICONS = {
 
 
 _TOK_DARK = {
-    "accent": "#4d8dff", "accent2": "#22c55e", "ink": "#f1f5f9", "line": "#2b3a52",
-    "panel": "#1a2436", "muted": "#94a3b8",
+    "accent": "#4d8dff", "accent2": "#22c55e", "ink": "#f1f5f9", "text": "#e2e8f0",
+    "line": "#2b3a52", "panel": "#1a2436", "muted": "#94a3b8",
+    "bg": "#0f172a", "cell": "#111a2e", "cell2": "#0c1424", "hdr": "#182338",
+    "hdr2": "#1e2b45",
     "inputbg": "#0f1a2e", "inputbd": "#35507a", "inputtx": "#e6edf7", "inputph": "#7a8db0",
     "sb1": "#152036", "sb2": "#111a2e", "sb3": "#161327",
     "glass": "rgba(255,255,255,.06)", "glassbd": "rgba(255,255,255,.12)",
@@ -164,8 +174,10 @@ _TOK_DARK = {
     "dlshadow": "rgba(77,141,255,.28)",
 }
 _TOK_LIGHT = {
-    "accent": "#2f6feb", "accent2": "#12b886", "ink": "#1f2933", "line": "#e2e8f0",
-    "panel": "#ffffff", "muted": "#5b6b80",
+    "accent": "#2f6feb", "accent2": "#12b886", "ink": "#1f2933", "text": "#1f2933",
+    "line": "#e2e8f0", "panel": "#ffffff", "muted": "#5b6b80",
+    "bg": "#f6f8fb", "cell": "#ffffff", "cell2": "#f7f9fc", "hdr": "#eef2f7",
+    "hdr2": "#e4eaf2",
     "inputbg": "#ffffff", "inputbd": "#cbd5e1", "inputtx": "#1f2933", "inputph": "#94a3b8",
     "sb1": "#eef3fb", "sb2": "#f3f6fc", "sb3": "#f0f2fb",
     "glass": "rgba(255,255,255,.72)", "glassbd": "rgba(15,23,42,.10)",
@@ -230,12 +242,37 @@ hr{margin:1rem 0;border-color:var(--line)}
 """
 
 
+_FORCE_TMPL = """
+.stApp,[data-testid="stAppViewContainer"],[data-testid="stMain"]{
+  background:@bg@!important;color:@text@!important}
+[data-testid="stHeader"]{background:transparent!important}
+.stMarkdown p,.stMarkdown li,.stMarkdown td,.stMarkdown th,
+[data-testid="stWidgetLabel"] p,label p{color:@text@!important}
+[data-testid="stCaptionContainer"],[data-testid="stCaptionContainer"] p{color:@muted@!important}
+h1,h2,h3,h4{color:@ink@!important}
+[data-testid="stExpander"]{background:@panel@!important;border:1px solid @line@!important}
+[data-testid="stExpander"] summary,[data-testid="stExpander"] summary *{color:@text@!important}
+[data-testid="stDataFrame"],[data-testid="stDataFrameResizable"],
+.glideDataEditor,.dvn-scroller{
+  --gdg-bg-cell:@cell@;--gdg-bg-cell-medium:@cell2@;--gdg-bg-header:@hdr@;
+  --gdg-bg-header-hovered:@hdr2@;--gdg-bg-header-has-focus:@hdr2@;
+  --gdg-text-dark:@text@;--gdg-text-medium:@muted@;--gdg-text-header:@text@;
+  --gdg-text-header-selected:@text@;--gdg-border-color:@line@;
+  --gdg-horizontal-border-color:@line@;--gdg-accent-color:@accent@;
+  background:@cell@!important}
+"""
+
+
 def inject_css() -> None:
     dark = is_dark()
     st.session_state["_dark"] = dark
     tok = _TOK_DARK if dark else _TOK_LIGHT
     root = ":root{" + "".join(f"--{k}:{v};" for k, v in tok.items()) + "}"
-    st.markdown("<style>" + root + "\n" + _STATIC_CSS + "</style>",
+    force = _FORCE_TMPL
+    for k in ("bg", "text", "ink", "panel", "line", "cell", "cell2", "hdr",
+              "hdr2", "muted", "accent"):
+        force = force.replace(f"@{k}@", tok[k])
+    st.markdown("<style>" + root + "\n" + _STATIC_CSS + "\n" + force + "</style>",
                 unsafe_allow_html=True)
     # faint logo watermark — only once signed in, so it doesn't ghost
     # behind the crisp logo on the login card
@@ -536,9 +573,16 @@ with st.sidebar:
     page = st.radio("Page", visible, label_visibility="collapsed",
                     format_func=lambda p: f"{PAGE_ICONS.get(p, '•')}  {p}")
     st.divider()
-    st.caption("🌗 **Light / Dark** — top-right **⋮** (or **≡**) → **Settings** → "
-               "*Appearance* / *Choose app theme* → Light · Dark · Use system. "
-               "The choice is saved in this browser.")
+    _cur = "Dark" if is_dark() else "Light"
+    _pick = st.segmented_control(
+        "Appearance", ["Light", "Dark"], default=_cur,
+        selection_mode="single", key="theme_seg", label_visibility="collapsed",
+    ) or _cur
+    _new = _pick.lower()
+    if _new != st.session_state.get("theme_choice"):
+        st.session_state["theme_choice"] = _new
+        st.query_params["theme"] = _new
+        st.rerun()
 
 # guard against a stale / disallowed selection
 if not can_see(page, st.session_state.get("permission", "")):
