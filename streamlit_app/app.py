@@ -552,6 +552,8 @@ sp AS (
              AND substr(site_delivery_date,1,10) <= :asof, false))        AS delivered,
            bool_or(coalesce(irn_date ~ '{_ISO}'
              AND substr(irn_date,1,10) <= :asof, false))                  AS irn_done,
+           bool_or(coalesce(delivery_date ~ '{_ISO}'
+             AND substr(delivery_date,1,10) <= :asof, false))             AS to_paint,
            bool_or(upper(trim(coalesce(paint_status,''))) = 'YES')        AS needs_paint
     FROM spools
     WHERE shop_field='S'
@@ -561,6 +563,7 @@ SELECT
   (SELECT count(*) FROM sp)                          AS total_spools,
   (SELECT count(*) FROM sp WHERE welded)             AS completed_spools,
   (SELECT count(*) FROM sp WHERE delivered)          AS delivered_spools,
+  (SELECT count(*) FROM sp WHERE to_paint)           AS painting_spools,
   (SELECT count(*) FROM sp WHERE welded AND NOT irn_done AND needs_paint)      AS wait_irn_paint,
   (SELECT count(*) FROM sp WHERE welded AND NOT irn_done AND NOT needs_paint)  AS wait_irn_site,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S')                       AS shop_di,
@@ -669,8 +672,9 @@ def page_overview() -> None:
     dsp = int(s["delivered_spools"] or 0)
     wip = int(s["wait_irn_paint"] or 0)
     wis = int(s["wait_irn_site"] or 0)
+    psp = int(s["painting_spools"] or 0)
     pct = lambda n: (f"{n / tsp * 100:.0f}%" if tsp else None)
-    r4 = st.columns(5)
+    r4 = st.columns(6)
     r4[0].metric("Total pipe spools", f"{tsp:,}", border=True)
     r4[1].metric("Total completed spools", f"{csp:,}", pct(csp),
                  delta_color="off", border=True)
@@ -680,8 +684,12 @@ def page_overview() -> None:
     r4[3].metric("Waiting QC/IRN → site", f"{wis:,}", pct(wis),
                  delta_color="off", border=True,
                  help="Welded, no painting required (paint status ≠ Yes), no IRN yet.")
-    r4[4].metric("Total delivered spools", f"{dsp:,}", pct(dsp),
-                 delta_color="off", border=True)
+    r4[4].metric("Delivered to painting shop", f"{psp:,}", pct(psp),
+                 delta_color="off", border=True,
+                 help="Spools with a painting delivery date (delivery_date).")
+    r4[5].metric("Total delivered spools", f"{dsp:,}", pct(dsp),
+                 delta_color="off", border=True,
+                 help="Spools with a site delivery date (site_delivery_date).")
 
     st.subheader("Cumulative S-curve (shop dia-inch)")
     sc = db.query(
