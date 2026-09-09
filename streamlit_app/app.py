@@ -219,7 +219,7 @@ div[data-testid="stMetric"] label p { color:#94a3b8; font-weight:500; }
   text-overflow:clip !important; max-width:none !important;
   -webkit-line-clamp:unset !important;
 }
-[data-testid="stMetricLabel"] p { font-size:.74rem; line-height:1.25; }
+[data-testid="stMetricLabel"] p { font-size:.9rem; font-weight:600; line-height:1.3; }
 .stButton>button, .stDownloadButton>button, .stForm button {
   border-radius:9px; font-weight:600;
 }
