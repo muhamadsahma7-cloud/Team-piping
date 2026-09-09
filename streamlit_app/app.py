@@ -1782,15 +1782,17 @@ def page_field_workers() -> None:
 
 
 # the fields that make one spool = one QR
-_SPOOL_KEY = ("wo_no", "batch_no", "iso_dwg_no", "line_no",
-              "iso_run_no", "dwg_spool_no", "material_group")
+# A spool = these four fields (same definition the dashboard uses). WO /
+# batch / material are shown on the label but NOT part of the key - they
+# can differ joint-to-joint and would otherwise split one spool into many.
+_SPOOL_KEY = ("iso_dwg_no", "line_no", "iso_run_no", "dwg_spool_no")
 
 
 def page_qr_labels() -> None:
     st.header("🏷️ QR labels")
-    st.caption("One QR per spool — work order · batch · ISO dwg · line · page · "
-               "dwg spool · material. Print, stick one on each spool; scanning it "
-               "lists that spool's joints to update.")
+    st.caption("One QR per spool (ISO dwg · line · page · dwg spool). The label "
+               "also prints WO / batch / material. Scanning it lists every joint "
+               "on that spool to update.")
 
     settings = db.get_settings()
     saved_url = settings.get("app_url", "")
@@ -1905,6 +1907,29 @@ def page_qr_labels() -> None:
         st.success(f"Coded {len(groups)} new spool(s)"
                    + (f", topped up {filled} joint(s)." if filled else "."))
         st.rerun()
+
+    with st.expander("Re-code every spool (wipe and start over)"):
+        st.caption("Use this if the codes were built with a different spool "
+                   "grouping (e.g. one QR per joint). It clears every shop qr_id "
+                   "and assigns one fresh code per spool. Scan history stays "
+                   "readable but stops linking to the joint. Re-print afterwards.")
+        if st.button("♻ Wipe & re-code all shop spools"):
+            db.write("UPDATE spools SET qr_id = NULL WHERE shop_field='S'")
+            fresh = db.query(
+                f"""SELECT {", ".join(f"coalesce({c},'') AS {c}" for c in _SPOOL_KEY)}
+                      FROM spools WHERE shop_field='S' GROUP BY {grp}""",
+                ttl=0,
+            )
+            cond = " AND ".join(f"coalesce({c},'') = :{c}" for c in _SPOOL_KEY)
+            db.execute_many(
+                f"UPDATE spools SET qr_id = :qc "
+                f"WHERE shop_field='S' AND coalesce(qr_id,'')='' AND {cond}",
+                [{**{c: row[c] for c in _SPOOL_KEY}, "qc": qr.new_code()}
+                 for _, row in fresh.iterrows()],
+            )
+            st.cache_data.clear()
+            st.success(f"Re-coded {len(fresh)} spool(s). Rebuild and re-print.")
+            st.rerun()
 
     st.divider()
     st.subheader("Print sheet")
@@ -2617,30 +2642,24 @@ def page_admin() -> None:
                 if auto_snap:
                     sname = _SNAP_PREFIX + pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
                     cx.execute(_t(f'CREATE TABLE public."{sname}" AS SELECT * FROM public.spools'))
+                _kk = ("iso_dwg_no", "line_no", "iso_run_no", "dwg_spool_no")
                 if has_qr:
                     # carry printed spool QR codes over the re-import, by spool key
-                    cx.execute(_t("""
-                        CREATE TEMP TABLE _qr_keep ON COMMIT DROP AS
-                        SELECT DISTINCT wo_no, batch_no, iso_dwg_no, line_no,
-                               iso_run_no, dwg_spool_no, material_group, qr_id
-                        FROM public.spools WHERE coalesce(qr_id,'') <> ''
-                    """))
+                    cx.execute(_t(
+                        "CREATE TEMP TABLE _qr_keep ON COMMIT DROP AS "
+                        f"SELECT DISTINCT {', '.join(_kk)}, qr_id "
+                        "FROM public.spools WHERE coalesce(qr_id,'') <> ''"
+                    ))
                 cx.execute(_t("TRUNCATE public.spools RESTART IDENTITY"))
                 clean.to_sql("spools", cx, if_exists="append", index=False,
                              chunksize=1000, method="multi")
                 if has_qr:
-                    relinked = cx.execute(_t("""
-                        UPDATE public.spools s SET qr_id = k.qr_id
-                        FROM _qr_keep k
-                        WHERE s.qr_id IS NULL
-                          AND coalesce(s.wo_no,'')          = coalesce(k.wo_no,'')
-                          AND coalesce(s.batch_no,'')       = coalesce(k.batch_no,'')
-                          AND coalesce(s.iso_dwg_no,'')     = coalesce(k.iso_dwg_no,'')
-                          AND coalesce(s.line_no,'')        = coalesce(k.line_no,'')
-                          AND coalesce(s.iso_run_no,'')     = coalesce(k.iso_run_no,'')
-                          AND coalesce(s.dwg_spool_no,'')   = coalesce(k.dwg_spool_no,'')
-                          AND coalesce(s.material_group,'') = coalesce(k.material_group,'')
-                    """)).rowcount
+                    _m = " AND ".join(
+                        f"coalesce(s.{c},'') = coalesce(k.{c},'')" for c in _kk)
+                    relinked = cx.execute(_t(
+                        "UPDATE public.spools s SET qr_id = k.qr_id "
+                        f"FROM _qr_keep k WHERE s.qr_id IS NULL AND {_m}"
+                    )).rowcount
             try:
                 db.execute("INSERT INTO user_log (username) VALUES (:u)",
                            {"u": f"{st.session_state['user']} [excel import {len(clean)} rows]"})
