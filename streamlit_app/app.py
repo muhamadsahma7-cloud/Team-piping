@@ -1033,6 +1033,29 @@ def page_targets() -> None:
             cur["Fit-up"] = int(crew.iloc[0]["total_fitters"] or 0)
             cur["Welding"] = int(crew.iloc[0]["total_welders"] or 0)
 
+        # average output per person per day, from manpower_reports (same basis
+        # as the dashboard's "Avg fit-up / fitter" and "Avg welding / welder")
+        ph = db.query(
+            f"""
+            SELECT
+              (SELECT avg(CASE WHEN mr.total_fitters>0 THEN fd.d/mr.total_fitters END)
+                 FROM (SELECT substr(fitup_date,1,10) dt, sum(joint_size) d FROM spools
+                       WHERE shop_field='S' AND fitup_date ~ '{_ISO}' GROUP BY 1) fd
+                 JOIN manpower_reports mr ON fd.dt = mr.date
+                 WHERE mr.total_fitters > 0)                       AS fit_per_head,
+              (SELECT avg(CASE WHEN mr.total_welders>0 THEN wd.d/mr.total_welders END)
+                 FROM (SELECT substr(welding_date,1,10) dt, sum(joint_size) d FROM spools
+                       WHERE shop_field='S' AND welding_date ~ '{_ISO}' GROUP BY 1) wd
+                 JOIN manpower_reports mr ON wd.dt = mr.date
+                 WHERE mr.total_welders > 0)                       AS weld_per_head
+            """,
+            ttl=60,
+        ).iloc[0]
+        per_head_by = {
+            "Fit-up": float(ph["fit_per_head"] or 0),
+            "Welding": float(ph["weld_per_head"] or 0),
+        }
+
         rec_rows, headline = [], []
         for r in rep.to_dict("records"):
             disc = r["Discipline"]
@@ -1041,23 +1064,29 @@ def page_targets() -> None:
             ach = float(r["Achieved/day"])
             uplift = rate / ach if ach > 0 else float("nan")
             crew_now = cur[disc]
-            per_head = ach / crew_now if crew_now > 0 else float("nan")
-            crew_need = math.ceil(rate / per_head) if per_head and per_head > 0 else None
+            per_head = per_head_by[disc]           # dia-inch / person / day
+            crew_need = math.ceil(rate / per_head) if per_head > 0 else None
             rec_rows.append({
                 "Discipline": disc,
                 "Balance": round(bal, 2),
-                "Working days left": remain_wd,
+                "Days left": remain_wd,
                 "Recovery rate/day": round(rate, 2),
                 "Current rate/day": round(ach, 2),
                 "Uplift needed": None if ach == 0 else round(uplift, 2),
+                "Dia-inch / person / day": round(per_head, 2) if per_head else None,
                 "Crew now": crew_now or None,
                 "Crew needed": crew_need,
-                "Extra crew": (crew_need - crew_now) if (crew_need is not None and crew_now)
-                              else None,
+                "Extra crew": (max(crew_need - crew_now, 0)
+                               if (crew_need is not None and crew_now) else None),
             })
             if r["Status"] == "BEHIND":
-                extra = (f", ~{crew_need} crew (+{crew_need - crew_now})"
-                         if crew_need is not None and crew_now else "")
+                if crew_need is not None and crew_now:
+                    extra = (f", ~{crew_need} {'fitters' if disc == 'Fit-up' else 'welders'}"
+                             f" (+{max(crew_need - crew_now, 0)})")
+                elif crew_need is not None:
+                    extra = f", ~{crew_need} {'fitters' if disc == 'Fit-up' else 'welders'}"
+                else:
+                    extra = " (no manpower history — add daily counts to size the crew)"
                 headline.append(f"**{disc}** → {rate:,.1f}/day "
                                 f"({uplift:.1f}× current){extra}")
         st.markdown(f"To finish by **{target_date.isoformat()}** ({remain_wd} working "
@@ -1067,10 +1096,12 @@ def page_targets() -> None:
             rr, use_container_width=True, hide_index=True,
             column_config={c: st.column_config.NumberColumn(c, format="%.2f")
                            for c in ("Balance", "Recovery rate/day", "Current rate/day",
-                                     "Uplift needed")},
+                                     "Uplift needed", "Dia-inch / person / day")},
         )
-        st.caption("Recovery rate = balance ÷ working days left. Crew needed uses the "
-                   "project's own productivity so far (current rate ÷ current crew).")
+        st.caption("Recovery rate = balance ÷ working days left. "
+                   "Crew needed = recovery rate ÷ average dia-inch per person per day "
+                   "(from `manpower_reports`, same basis as the dashboard's "
+                   "*Avg fit-up / fitter* and *Avg welding / welder*).")
 
     end = max(target_date, today)
     idx = pd.date_range(plan_start, end, freq="D")
