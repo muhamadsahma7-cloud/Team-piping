@@ -273,5 +273,14 @@ alter table public.project_settings  enable row level security;
 alter table public.qc_wcs_docs        enable row level security;
 
 -- =====================================================================
+-- First admin (a fresh database has no users). Uncomment, set a real
+-- password, run once, then manage everyone else from the app's
+-- "Users & access" page. Passwords are plain text (matching the app).
+-- =====================================================================
+-- insert into public.user_credentials (username, password, permission)
+-- values ('admin', 'CHANGE-ME', 'all')
+-- on conflict (username) do nothing;
+
+-- =====================================================================
 -- done
 -- =====================================================================
