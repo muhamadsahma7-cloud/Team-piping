@@ -340,6 +340,30 @@ def login_gate() -> None:
     st.stop()
 
 
+def kiosk_auth() -> None:
+    """A QR that carries &k=<token> auto-signs-in as the configured
+    shop-floor account, so the phone never sees the login screen.
+    Set up on the QR labels page; token lives in project_settings."""
+    if st.session_state.get("user"):
+        return
+    k = st.query_params.get("k")
+    if not k:
+        return
+    try:
+        s = db.get_settings()
+        if not s.get("kiosk_token") or k != s["kiosk_token"] or not s.get("kiosk_user"):
+            return
+        row = db.query("SELECT permission FROM user_credentials WHERE username = :u",
+                       {"u": s["kiosk_user"]}, ttl=0)
+    except Exception:
+        return
+    if row.empty:
+        return
+    st.session_state["user"] = s["kiosk_user"]
+    st.session_state["permission"] = row.iloc[0]["permission"]
+    st.session_state["kiosk"] = True
+
+
 def welcome_splash() -> None:
     """One-shot full-screen weld-in flourish right after a successful login.
     CSS/SVG only — fades itself out, no rerun needed."""
@@ -483,6 +507,7 @@ _qs = st.query_params.get("scan")
 if _qs and _qs != st.session_state.get("_scan_dismissed"):
     st.session_state["pending_scan"] = _qs
 logout_splash()
+kiosk_auth()          # QR with &k=<token> signs in silently, before the gate
 login_gate()
 welcome_splash()
 
@@ -573,11 +598,16 @@ with st.sidebar:
     st.markdown(BRAND_HTML, unsafe_allow_html=True)
     if st.session_state.get("project"):
         st.caption(f"Project: **{st.session_state['project']}**")
-    st.caption(f"Signed in as **{st.session_state['user']}**")
+    st.caption(f"Signed in as **{st.session_state['user']}**"
+               + ("  ·  kiosk" if st.session_state.get("kiosk") else ""))
     if st.button("Sign out", use_container_width=True):
         st.cache_data.clear()
         st.session_state.clear()
         st.session_state["just_logged_out"] = True
+        try:                       # drop &k / &scan so a kiosk QR doesn't re-auth
+            st.query_params.clear()
+        except Exception:
+            pass
         st.rerun()
     sidebar_clock()
     st.divider()
@@ -1749,6 +1779,42 @@ def page_qr_labels() -> None:
         st.success("Saved.")
         st.rerun()
 
+    # -- kiosk sign-in: bake &k=<token> into every QR so the phone never
+    #    sees the login screen (auto-signs-in as a scan-only account) ------
+    with st.expander("📵 Skip the login screen on the shop floor (kiosk mode)",
+                     expanded=bool(settings.get("kiosk_token"))):
+        st.caption("Bakes a token into every QR that auto-signs-in as the "
+                   "account below — no username / password on the phone. Use it "
+                   "**only** with an account that has just the shop-floor QR "
+                   "grant: anyone who photographs a label can open the scan tab "
+                   "as that account (each scan is still signed with the "
+                   "worker's own name + PIN). Re-print the labels after you "
+                   "enable or regenerate.")
+        _users = db.query("SELECT username, permission FROM user_credentials "
+                          "ORDER BY username", ttl=0)
+        _scan_only = [u for u, p in zip(_users["username"], _users["permission"])
+                      if {t.strip() for t in str(p).split(",")} == {"Field Scan"}]
+        _opts = _scan_only or list(_users["username"])
+        cur_user = settings.get("kiosk_user", "")
+        idx = _opts.index(cur_user) if cur_user in _opts else 0
+        ku = st.selectbox("Auto-sign-in as", _opts, index=idx,
+                          help="Recommended: an account with only 'Shop-floor QR scan'.")
+        cc = st.columns(2)
+        if cc[0].button("Enable / regenerate token", type="primary"):
+            db.set_settings({"kiosk_token": qr.new_code(16), "kiosk_user": ku})
+            st.cache_data.clear()
+            st.success("Kiosk enabled. Re-build and re-print the label sheet.")
+            st.rerun()
+        if settings.get("kiosk_token"):
+            if cc[1].button("Disable kiosk"):
+                db.set_settings({"kiosk_token": "", "kiosk_user": ""})
+                st.cache_data.clear()
+                st.success("Kiosk disabled. Labels now open the login screen.")
+                st.rerun()
+            st.info(f"Active — QRs auto-sign-in as **{settings.get('kiosk_user','?')}**.")
+
+    kiosk_token = settings.get("kiosk_token", "")
+
     gcond = " AND ".join(f"coalesce(s.{c},'') = coalesce(g.{c},'')" for c in _SPOOL_KEY)
     grp = ", ".join(_SPOOL_KEY)
 
@@ -1850,7 +1916,8 @@ def page_qr_labels() -> None:
             st.warning("Set the App URL first — without it the QR codes open nothing.")
         else:
             try:
-                pdf = qr.labels_pdf(rows.to_dict("records"), base)
+                pdf = qr.labels_pdf(rows.to_dict("records"), base,
+                                    kiosk_token=kiosk_token)
                 st.download_button("⬇ Download QR sheet (PDF)", pdf,
                                    file_name=f"qr_labels_{reports.stamp()}.pdf",
                                    mime="application/pdf", type="primary")

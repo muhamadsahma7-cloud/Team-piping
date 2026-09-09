@@ -18,9 +18,12 @@ def new_code(n: int = 10) -> str:
     return "".join(secrets.choice(_ALPHABET) for _ in range(n))
 
 
-def scan_url(base: str, code: str) -> str:
+def scan_url(base: str, code: str, kiosk_token: str = "") -> str:
     base = (base or "").strip().rstrip("/")
-    return f"{base}/?scan={code}" if base else f"?scan={code}"
+    q = f"?scan={code}"
+    if kiosk_token:
+        q += f"&k={kiosk_token}"
+    return f"{base}/{q}" if base else q
 
 
 def qr_png(data: str, *, box_size: int = 9, border: int = 2) -> bytes:
@@ -42,7 +45,7 @@ def _font(size: int):
         return ImageFont.load_default()
 
 
-def labels_pdf(rows: list[dict], base_url: str, *,
+def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "",
                cols: int = 3, rows_per_page: int = 7) -> bytes:
     """Print-ready sheet of QR labels, one per spool.
 
@@ -78,7 +81,7 @@ def labels_pdf(rows: list[dict], base_url: str, *,
         draw.rectangle([cx + 4, cy + 4, cx + cell_w - 4, cy + cell_h - 4],
                        outline="#cccccc", width=1)
 
-        qr = qrcode.make(scan_url(base_url, r["qr_id"]),
+        qr = qrcode.make(scan_url(base_url, r["qr_id"], kiosk_token),
                          box_size=6, border=1).get_image().convert("RGB")
         q = min(cell_w - 24, cell_h - 150)
         qr = qr.resize((q, q))
