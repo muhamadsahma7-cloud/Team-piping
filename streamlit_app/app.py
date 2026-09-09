@@ -364,7 +364,7 @@ def logout_splash() -> None:
         return
     reason = st.session_state.pop("logout_reason", "")
     hi = "Timed out" if reason == "idle" else "Signed out"
-    sub = ("Inactive for 5 minutes &nbsp;·&nbsp; session closed" if reason == "idle"
+    sub = ("Inactive for 30 minutes &nbsp;·&nbsp; session closed" if reason == "idle"
            else "Session closed &nbsp;·&nbsp; see you on the next joint")
     st.markdown(
         ("""
@@ -466,7 +466,7 @@ def can_see(page: str, perm: str) -> bool:
     return any(t in perm for t in toks)
 
 
-IDLE_LIMIT_S = 300   # auto sign-out after 5 min with no interaction
+IDLE_LIMIT_S = 1800   # auto sign-out after 30 min with no interaction
 
 
 @st.fragment(run_every="1s")
