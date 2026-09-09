@@ -208,18 +208,22 @@ div[data-testid="stMetric"] {
   border-radius:12px; padding:14px 16px;
 }
 div[data-testid="stMetric"] label p { color:#94a3b8; font-weight:500; }
-/* never clip / ellipsis a metric label — let it wrap to full text */
+/* label: wrap to full text, never ellipsis */
 [data-testid="stMetric"] label,
 [data-testid="stMetric"] label *,
 [data-testid="stMetricLabel"],
-[data-testid="stMetricLabel"] *,
-[data-testid="stMetricValue"],
-[data-testid="stMetricValue"] * {
+[data-testid="stMetricLabel"] * {
   white-space:normal !important; overflow:visible !important;
   text-overflow:clip !important; max-width:none !important;
   -webkit-line-clamp:unset !important;
 }
 [data-testid="stMetricLabel"] p { font-size:.9rem; font-weight:600; line-height:1.3; }
+/* value: keep on ONE line, shrink to fit the card instead of wrapping */
+[data-testid="stMetricValue"], [data-testid="stMetricValue"] * {
+  white-space:nowrap !important; overflow:visible !important;
+  font-size:clamp(1.05rem, 1.7vw, 1.5rem) !important;
+  font-variant-numeric:tabular-nums;
+}
 .stButton>button, .stDownloadButton>button, .stForm button {
   border-radius:9px; font-weight:600;
 }
