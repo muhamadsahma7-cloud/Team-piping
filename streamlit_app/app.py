@@ -549,7 +549,10 @@ sp AS (
     SELECT bool_and(coalesce(welding_date ~ '{_ISO}'
              AND substr(welding_date,1,10) <= :asof, false))              AS welded,
            bool_or(coalesce(site_delivery_date ~ '{_ISO}'
-             AND substr(site_delivery_date,1,10) <= :asof, false))        AS delivered
+             AND substr(site_delivery_date,1,10) <= :asof, false))        AS delivered,
+           bool_or(coalesce(irn_date ~ '{_ISO}'
+             AND substr(irn_date,1,10) <= :asof, false))                  AS irn_done,
+           bool_or(upper(trim(coalesce(paint_status,''))) = 'YES')        AS needs_paint
     FROM spools
     WHERE shop_field='S'
     GROUP BY iso_dwg_no, line_no, iso_run_no, dwg_spool_no
@@ -558,6 +561,8 @@ SELECT
   (SELECT count(*) FROM sp)                          AS total_spools,
   (SELECT count(*) FROM sp WHERE welded)             AS completed_spools,
   (SELECT count(*) FROM sp WHERE delivered)          AS delivered_spools,
+  (SELECT count(*) FROM sp WHERE welded AND NOT irn_done AND needs_paint)      AS wait_irn_paint,
+  (SELECT count(*) FROM sp WHERE welded AND NOT irn_done AND NOT needs_paint)  AS wait_irn_site,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S')                       AS shop_di,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='F')                       AS field_di,
   (SELECT count(DISTINCT wo_no) FROM spools
@@ -662,12 +667,21 @@ def page_overview() -> None:
     tsp = int(s["total_spools"] or 0)
     csp = int(s["completed_spools"] or 0)
     dsp = int(s["delivered_spools"] or 0)
-    r4 = st.columns(3)
+    wip = int(s["wait_irn_paint"] or 0)
+    wis = int(s["wait_irn_site"] or 0)
+    pct = lambda n: (f"{n / tsp * 100:.0f}%" if tsp else None)
+    r4 = st.columns(5)
     r4[0].metric("Total pipe spools", f"{tsp:,}", border=True)
-    r4[1].metric("Total completed spools", f"{csp:,}",
-                 f"{csp/tsp*100:.0f}%" if tsp else None, delta_color="off", border=True)
-    r4[2].metric("Total delivered spools", f"{dsp:,}",
-                 f"{dsp/tsp*100:.0f}%" if tsp else None, delta_color="off", border=True)
+    r4[1].metric("Total completed spools", f"{csp:,}", pct(csp),
+                 delta_color="off", border=True)
+    r4[2].metric("Waiting QC/IRN → painting", f"{wip:,}", pct(wip),
+                 delta_color="off", border=True,
+                 help="Welded, needs painting (paint status = Yes), no IRN yet.")
+    r4[3].metric("Waiting QC/IRN → site", f"{wis:,}", pct(wis),
+                 delta_color="off", border=True,
+                 help="Welded, no painting required (paint status ≠ Yes), no IRN yet.")
+    r4[4].metric("Total delivered spools", f"{dsp:,}", pct(dsp),
+                 delta_color="off", border=True)
 
     st.subheader("Cumulative S-curve (shop dia-inch)")
     sc = db.query(
