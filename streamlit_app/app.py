@@ -67,22 +67,30 @@ def show_table(df: pd.DataFrame, name: str, *, progress: tuple = (),
                        file_name=f"{name}.csv", mime="text/csv", key=f"dl_{name}")
 
 
-_ALT_AXIS = "#9fb0c9"
+def is_dark() -> bool:
+    """Viewer's active theme (chosen in the ⋮ menu). Default dark."""
+    try:
+        return st.context.theme.type == "dark"
+    except Exception:
+        return st.session_state.get("_dark", True)
 
 
 def dark_alt(chart):
-    """Make an Altair chart legible on the dark theme (call once, at render)."""
+    """Theme-aware Altair config (call once, at render)."""
+    d = is_dark()
+    axis = "#9fb0c9" if d else "#5b6b80"
+    grid = "#26344c" if d else "#e3e8ef"
     return (
         chart.configure(background="transparent")
         .configure_view(strokeWidth=0)
-        .configure_axis(labelColor=_ALT_AXIS, titleColor=_ALT_AXIS,
-                        gridColor="#26344c", domainColor="#26344c")
-        .configure_legend(labelColor=_ALT_AXIS, titleColor=_ALT_AXIS)
-        .configure_title(color="#e2e8f0")
+        .configure_axis(labelColor=axis, titleColor=axis, gridColor=grid, domainColor=grid)
+        .configure_legend(labelColor=axis, titleColor=axis)
+        .configure_title(color="#e2e8f0" if d else "#1f2933")
     )
 
 
 def donut(done: float, total: float, color: str = "#22c55e"):
+    d = is_dark()
     pct = (done / total * 100) if total else 0
     src = pd.DataFrame({"cat": ["done", "remaining"],
                         "val": [done, max(total - done, 0.0)]})
@@ -91,12 +99,13 @@ def donut(done: float, total: float, color: str = "#22c55e"):
         .encode(theta=alt.Theta("val:Q", stack=True),
                 color=alt.Color("cat:N", legend=None,
                                 scale=alt.Scale(domain=["done", "remaining"],
-                                                range=[color, "#2b3a52"])),
+                                                range=[color, "#2b3a52" if d else "#e5e9f0"])),
                 tooltip=[alt.Tooltip("cat:N", title=""),
                          alt.Tooltip("val:Q", title="dia-inch", format=",.1f")])
     )
     text = (alt.Chart(pd.DataFrame({"t": [f"{pct:.0f}%"]}))
-            .mark_text(size=22, fontWeight="bold", color="#e2e8f0").encode(text="t:N"))
+            .mark_text(size=22, fontWeight="bold",
+                       color="#e2e8f0" if d else "#1f2933").encode(text="t:N"))
     return (arc + text).properties(height=180)
 
 
@@ -104,7 +113,7 @@ def donut_block(col, label: str, done: float, total: float, color: str) -> None:
     col.markdown(
         f"<div style='text-align:center;line-height:1.25'>"
         f"<b>{label}</b><br>"
-        f"<span style='color:#94a3b8;font-size:0.85em'>"
+        f"<span style='color:var(--muted,#94a3b8);font-size:0.85em'>"
         f"{done:,.0f} / {total:,.0f} dia-inch</span></div>",
         unsafe_allow_html=True,
     )
@@ -127,10 +136,10 @@ _PIPE_SVG = (
 )
 BRAND_HTML = (
     "<div style='line-height:1.12;margin:.1rem 0 .35rem'>"
-    f"<div style='font-size:1.7rem;font-weight:800;color:#f1f5f9'>"
+    f"<div style='font-size:1.7rem;font-weight:800;color:var(--ink,#f1f5f9)'>"
     f"{_PIPE_SVG}Team Piping</div>"
     "<div style='font-size:.72rem;font-weight:700;letter-spacing:.16em;"
-    "color:#4d8dff;margin-top:3px'>NAEC MALAYSIA SDN BHD</div></div>"
+    "color:var(--accent,#4d8dff);margin-top:3px'>NAEC MALAYSIA SDN BHD</div></div>"
 )
 
 PAGE_ICONS = {
@@ -141,108 +150,93 @@ PAGE_ICONS = {
 }
 
 
+_TOK_DARK = {
+    "accent": "#4d8dff", "accent2": "#22c55e", "ink": "#f1f5f9", "line": "#2b3a52",
+    "panel": "#1a2436", "muted": "#94a3b8",
+    "inputbg": "#0f1a2e", "inputbd": "#35507a", "inputtx": "#e6edf7", "inputph": "#7a8db0",
+    "sb1": "#152036", "sb2": "#111a2e", "sb3": "#161327",
+    "glass": "rgba(255,255,255,.06)", "glassbd": "rgba(255,255,255,.12)",
+    "glasshov": "rgba(77,141,255,.18)",
+    "pill": "rgba(255,255,255,.045)", "pillbd": "rgba(255,255,255,.08)",
+    "pillhov": "rgba(255,255,255,.09)",
+    "pillact": "rgba(77,141,255,.20)", "pillactbd": "rgba(77,141,255,.55)",
+    "sbshadow": "0 2px 14px rgba(0,0,0,.35)", "pillshadow": "0 1px 8px rgba(0,0,0,.3)",
+    "dlshadow": "rgba(77,141,255,.28)",
+}
+_TOK_LIGHT = {
+    "accent": "#2f6feb", "accent2": "#12b886", "ink": "#1f2933", "line": "#e2e8f0",
+    "panel": "#ffffff", "muted": "#5b6b80",
+    "inputbg": "#ffffff", "inputbd": "#cbd5e1", "inputtx": "#1f2933", "inputph": "#94a3b8",
+    "sb1": "#eef3fb", "sb2": "#f3f6fc", "sb3": "#f0f2fb",
+    "glass": "rgba(255,255,255,.72)", "glassbd": "rgba(15,23,42,.10)",
+    "glasshov": "rgba(47,111,235,.10)",
+    "pill": "rgba(255,255,255,.62)", "pillbd": "rgba(15,23,42,.08)",
+    "pillhov": "rgba(255,255,255,.9)",
+    "pillact": "rgba(47,111,235,.12)", "pillactbd": "rgba(47,111,235,.42)",
+    "sbshadow": "0 2px 10px rgba(15,23,42,.06)", "pillshadow": "0 1px 6px rgba(15,23,42,.05)",
+    "dlshadow": "rgba(47,111,235,.22)",
+}
+
+_STATIC_CSS = """
+.block-container{padding-top:2rem;max-width:1320px;position:relative;z-index:1}
+section[data-testid="stSidebar"]{z-index:2}
+.stTextInput input,.stNumberInput input,.stDateInput input,.stTextArea textarea,
+[data-baseweb="input"],[data-baseweb="select"]>div,[data-baseweb="textarea"]{
+  background:var(--inputbg)!important;color:var(--inputtx)!important;
+  border:1px solid var(--inputbd)!important;border-radius:8px!important}
+.stTextInput input::placeholder,.stTextArea textarea::placeholder{color:var(--inputph)!important}
+.stTextInput input:focus,.stNumberInput input:focus,.stTextArea textarea:focus{border-color:var(--accent)!important}
+h1{font-weight:700;letter-spacing:-.01em;color:var(--ink)}
+h2{margin-top:.3rem;padding-bottom:.35rem;border-bottom:2px solid var(--line);color:var(--ink)}
+h3{color:var(--accent);font-weight:600}
+section[data-testid="stSidebar"]{
+  background:linear-gradient(180deg,var(--sb1) 0%,var(--sb2) 55%,var(--sb3) 100%);
+  border-right:1px solid var(--glassbd)}
+section[data-testid="stSidebar"] .stButton>button{
+  background:var(--glass);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+  border:1px solid var(--glassbd);box-shadow:var(--sbshadow);border-radius:12px;color:var(--ink)}
+section[data-testid="stSidebar"] .stButton>button:hover{
+  background:var(--glasshov);border-color:var(--accent);color:var(--accent)}
+section[data-testid="stSidebar"] [role="radiogroup"]>label{
+  background:var(--pill);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);
+  border:1px solid var(--pillbd);box-shadow:var(--pillshadow);border-radius:11px;
+  padding:.5rem .7rem!important;margin-bottom:6px;
+  transition:background .15s ease,border-color .15s ease,box-shadow .15s ease}
+section[data-testid="stSidebar"] [role="radiogroup"]>label:hover{background:var(--pillhov)}
+section[data-testid="stSidebar"] [role="radiogroup"]>label:has(input:checked){
+  background:var(--pillact);border-color:var(--pillactbd);box-shadow:0 2px 16px var(--pillact)}
+section[data-testid="stSidebar"] [role="radiogroup"]>label>div:first-child{display:none}
+div[data-testid="stMetric"]{
+  background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent);
+  border-radius:12px;padding:14px 16px}
+div[data-testid="stMetric"] label p{color:var(--muted);font-weight:500}
+[data-testid="stMetric"] label,[data-testid="stMetric"] label *,
+[data-testid="stMetricLabel"],[data-testid="stMetricLabel"] *{
+  white-space:normal!important;overflow:visible!important;text-overflow:clip!important;
+  max-width:none!important;-webkit-line-clamp:unset!important}
+[data-testid="stMetricLabel"] p{font-size:.9rem;font-weight:600;line-height:1.3}
+[data-testid="stMetricValue"],[data-testid="stMetricValue"] *{
+  white-space:nowrap!important;overflow:visible!important;
+  font-size:clamp(1.05rem,1.7vw,1.5rem)!important;font-variant-numeric:tabular-nums}
+.stButton>button,.stDownloadButton>button,.stForm button{border-radius:9px;font-weight:600}
+.stDownloadButton>button{padding:.7rem 1.1rem;font-size:1rem;min-height:3rem}
+.stDownloadButton>button[kind="primary"]{box-shadow:0 4px 16px var(--dlshadow)}
+div[data-testid="stDataFrame"],div[data-testid="stTable"]{border:1px solid var(--line);border-radius:10px}
+.stTabs [data-baseweb="tab-list"]{gap:2px}
+.stTabs [aria-selected="true"]{color:var(--accent)!important}
+div[data-testid="stAlert"]{border-radius:10px}
+[data-testid="stProgress"]>div>div>div{background:var(--accent2)}
+hr{margin:1rem 0;border-color:var(--line)}
+"""
+
+
 def inject_css() -> None:
-    # Dark theme. The app's base (page bg, text, dataframe grid) comes from
-    # .streamlit/config.toml (base = "dark"); this only adds the accents,
-    # glass sidebar and card styling. Viewers can switch to light via
-    # the ⋮ menu → Settings → Theme.
-    st.markdown(
-        """
-<style>
-:root { --accent:#4d8dff; --accent2:#22c55e; --ink:#f1f5f9; --line:#2b3a52; }
-.block-container { padding-top: 2rem; max-width: 1320px; position:relative; z-index:1; }
-section[data-testid="stSidebar"] { z-index:2; }
-/* inputs — keep visible on the dark theme */
-.stTextInput input, .stNumberInput input, .stDateInput input,
-.stTextArea textarea, [data-baseweb="input"], [data-baseweb="select"] > div,
-[data-baseweb="textarea"] {
-  background:#0f1a2e !important; color:#e6edf7 !important;
-  border:1px solid #35507a !important; border-radius:8px !important;
-}
-.stTextInput input::placeholder, .stTextArea textarea::placeholder { color:#7a8db0 !important; }
-.stTextInput input:focus, .stNumberInput input:focus, .stTextArea textarea:focus {
-  border-color:var(--accent) !important;
-}
-h1 { font-weight:700; letter-spacing:-.01em; color:var(--ink); }
-h2 { margin-top:.3rem; padding-bottom:.35rem; border-bottom:2px solid var(--line);
-     color:var(--ink); }
-h3 { color:var(--accent); font-weight:600; }
-/* --- frosted-glass sidebar --- */
-section[data-testid="stSidebar"] {
-  background: linear-gradient(180deg,#152036 0%,#111a2e 55%,#161327 100%);
-  border-right: 1px solid rgba(255,255,255,.06);
-}
-section[data-testid="stSidebar"] .stButton>button {
-  background: rgba(255,255,255,.06);
-  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
-  border: 1px solid rgba(255,255,255,.12);
-  box-shadow: 0 2px 14px rgba(0,0,0,.35);
-  border-radius: 12px; color: var(--ink);
-}
-section[data-testid="stSidebar"] .stButton>button:hover {
-  background: rgba(77,141,255,.18); border-color: var(--accent); color:#cfe0ff;
-}
-section[data-testid="stSidebar"] [role="radiogroup"] > label {
-  background: rgba(255,255,255,.045);
-  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
-  border: 1px solid rgba(255,255,255,.08);
-  box-shadow: 0 1px 8px rgba(0,0,0,.3);
-  border-radius: 11px;
-  padding: .5rem .7rem !important;
-  margin-bottom: 6px;
-  transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
-}
-section[data-testid="stSidebar"] [role="radiogroup"] > label:hover {
-  background: rgba(255,255,255,.09);
-}
-section[data-testid="stSidebar"] [role="radiogroup"] > label:has(input:checked) {
-  background: rgba(77,141,255,.20);
-  border-color: rgba(77,141,255,.55);
-  box-shadow: 0 2px 16px rgba(77,141,255,.22);
-}
-section[data-testid="stSidebar"] [role="radiogroup"] > label > div:first-child {
-  display: none;               /* hide radio dot for a clean pill */
-}
-div[data-testid="stMetric"] {
-  background:#1a2436; border:1px solid var(--line); border-left:4px solid var(--accent);
-  border-radius:12px; padding:14px 16px;
-}
-div[data-testid="stMetric"] label p { color:#94a3b8; font-weight:500; }
-/* label: wrap to full text, never ellipsis */
-[data-testid="stMetric"] label,
-[data-testid="stMetric"] label *,
-[data-testid="stMetricLabel"],
-[data-testid="stMetricLabel"] * {
-  white-space:normal !important; overflow:visible !important;
-  text-overflow:clip !important; max-width:none !important;
-  -webkit-line-clamp:unset !important;
-}
-[data-testid="stMetricLabel"] p { font-size:.9rem; font-weight:600; line-height:1.3; }
-/* value: keep on ONE line, shrink to fit the card instead of wrapping */
-[data-testid="stMetricValue"], [data-testid="stMetricValue"] * {
-  white-space:nowrap !important; overflow:visible !important;
-  font-size:clamp(1.05rem, 1.7vw, 1.5rem) !important;
-  font-variant-numeric:tabular-nums;
-}
-.stButton>button, .stDownloadButton>button, .stForm button {
-  border-radius:9px; font-weight:600;
-}
-.stDownloadButton>button {
-  padding:.7rem 1.1rem; font-size:1rem; min-height:3rem;
-}
-.stDownloadButton>button[kind="primary"] { box-shadow:0 4px 16px rgba(77,141,255,.28); }
-div[data-testid="stDataFrame"], div[data-testid="stTable"] {
-  border:1px solid var(--line); border-radius:10px;
-}
-.stTabs [data-baseweb="tab-list"] { gap:2px; }
-.stTabs [aria-selected="true"] { color:var(--accent) !important; }
-div[data-testid="stAlert"] { border-radius:10px; }
-[data-testid="stProgress"] > div > div > div { background:var(--accent2); }
-hr { margin:1rem 0; border-color:var(--line); }
-</style>
-""",
-        unsafe_allow_html=True,
-    )
+    dark = is_dark()
+    st.session_state["_dark"] = dark
+    tok = _TOK_DARK if dark else _TOK_LIGHT
+    root = ":root{" + "".join(f"--{k}:{v};" for k, v in tok.items()) + "}"
+    st.markdown("<style>" + root + "\n" + _STATIC_CSS + "</style>",
+                unsafe_allow_html=True)
     # faint logo watermark — only once signed in, so it doesn't ghost
     # behind the crisp logo on the login card
     if LOGO_URI and st.session_state.get("user"):
@@ -275,10 +269,10 @@ def login_gate() -> None:
             "background:none!important}</style>"
             "<div style='text-align:center'>"
             f"{_img}"
-            "<div style='font-size:1.7rem;font-weight:800;color:#f1f5f9;"
+            "<div style='font-size:1.7rem;font-weight:800;color:var(--ink,#f1f5f9);"
             "letter-spacing:.04em'>TEAM PIPING</div>"
             "<div style='font-size:.72rem;font-weight:700;letter-spacing:.16em;"
-            "color:#4d8dff;margin-top:3px'>NAEC MALAYSIA SDN BHD</div></div>",
+            "color:var(--accent,#4d8dff);margin-top:3px'>NAEC MALAYSIA SDN BHD</div></div>",
             unsafe_allow_html=True,
         )
         st.subheader("Sign in")
@@ -541,6 +535,9 @@ with st.sidebar:
     visible = [p for p in PAGE_PERMS if can_see(p, _perm)] or ["Overview"]
     page = st.radio("Page", visible, label_visibility="collapsed",
                     format_func=lambda p: f"{PAGE_ICONS.get(p, '•')}  {p}")
+    st.divider()
+    st.caption("🌗 Light / Dark — set it in the **⋮** menu (top-right) → "
+               "**Settings → Choose app theme**.")
 
 # guard against a stale / disallowed selection
 if not can_see(page, st.session_state.get("permission", "")):

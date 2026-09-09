@@ -1,15 +1,11 @@
-# App theme — DARK. Restart Streamlit after editing.
-# Keep in sync with ../.streamlit/config.toml (repo root, used by Streamlit Cloud).
-# To go back to light: base="light", backgroundColor="#f7f9fc",
-#   secondaryBackgroundColor="#ffffff", textColor="#1f2933"  (and swap inject_css()).
+# Dual theme. Each viewer chooses Light / Dark / System in the app's
+# ⋮ menu (top-right) → Settings → "Choose app theme". Streamlit switches
+# the base chrome + tables, and app.py's inject_css() follows via
+# st.context.theme. Keep in sync with ../.streamlit/config.toml.
 
 [theme]
-base = "dark"
-primaryColor = "#4d8dff"              # vivid blue accent
-backgroundColor = "#0f172a"           # slate-900 page
-secondaryBackgroundColor = "#1a2436"  # cards, sidebar, inputs, table header
-textColor = "#e2e8f0"
 font = "sans serif"
+primaryColor = "#2f6feb"
 
 [server]
 headless = true
