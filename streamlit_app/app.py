@@ -1592,9 +1592,15 @@ def page_reports() -> None:
         st.rerun()
 
     st.subheader("Spool status summary")
-    st.dataframe(summary, use_container_width=True, hide_index=True,
-                 column_config=num2_cfg(summary))
-    st.bar_chart(summary.set_index("Spool Status")["Total_Spools"])
+    st.dataframe(
+        summary, use_container_width=True, hide_index=True,
+        column_config={
+            "Dia-Inch": st.column_config.NumberColumn(format="%.2f"),
+            "% Spools": st.column_config.NumberColumn(format="%.1f%%"),
+            "% Dia-Inch": st.column_config.NumberColumn(format="%.1f%%"),
+        },
+    )
+    st.bar_chart(summary.set_index("Spool Status")["Pipe Spools"])
 
     ts = reports.stamp()
     _XL = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

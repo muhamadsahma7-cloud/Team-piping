@@ -92,11 +92,19 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
 
 
 _CLASSIFIED_COLS = [
-    "spool_key", "wo_no", "material_group", "zone", "service", "line_no", "iso_dwg_no",
-    "dwg_spool_no", "iso_run_no", "rev", "shop_field", "joint_no",
+    "spool_key", "wo_no", "batch_no", "material_group", "zone", "service", "line_no",
+    "iso_dwg_no", "dwg_spool_no", "iso_run_no", "rev", "shop_field", "joint_no",
     "joint_size", "welding_type", "pwht", "fitup_date", "welding_date",
     "fitup_inspection_date", "welding_inspection_date", "irn_date",
-    "delivery_date", "site_delivery_date", "paint_system", "Spool Status",
+    "delivery_date", "site_delivery_date", "paint_system", "paint_status",
+    "Spool Status",
+]
+
+# progression order used for the Summary sheet
+_STATUS_ORDER = [
+    "Not Started", "Under Fabrication", "Ready for PWHT", "All done-Awaiting IRN",
+    "Ready to Release", "Ready to Release-Straight Pipe",
+    "Sent to Painting", "Sent to Site",
 ]
 
 _FILL_COLORS = {
@@ -135,15 +143,21 @@ def summarize(classified: pd.DataFrame) -> pd.DataFrame:
         (classified["shop_field"] == "S")
         | classified["Spool Status"].isin(["Ready to Release-Straight Pipe", "Sent to Site"])
     ]
-    return (
+    g = (
         shop.groupby("Spool Status")
-        .agg(
-            Total_Spools=("spool_key", "nunique"),
-            Total_Joints=("joint_no", "count"),
-            Total_DiaInch=("joint_size", "sum"),
-        )
+        .agg(**{"Pipe Spools": ("spool_key", "nunique"),
+                "Joints": ("joint_no", "count"),
+                "Dia-Inch": ("joint_size", "sum")})
         .reset_index()
     )
+    tot_s, tot_d = g["Pipe Spools"].sum(), g["Dia-Inch"].sum()
+    g["% Spools"] = (g["Pipe Spools"] / tot_s * 100).round(1) if tot_s else 0.0
+    g["% Dia-Inch"] = (g["Dia-Inch"] / tot_d * 100).round(1) if tot_d else 0.0
+    g["Dia-Inch"] = g["Dia-Inch"].round(2)
+    _rank = {s: i for i, s in enumerate(_STATUS_ORDER)}
+    return (g.sort_values("Spool Status", key=lambda c: c.map(lambda x: _rank.get(x, 99)))
+             .reset_index(drop=True)
+             [["Spool Status", "Pipe Spools", "Joints", "Dia-Inch", "% Spools", "% Dia-Inch"]])
 
 
 def build_classified_xlsx(df: pd.DataFrame) -> bytes:
@@ -157,26 +171,86 @@ def build_classified_xlsx(df: pd.DataFrame) -> bytes:
     shop_field_summary = (
         classified.groupby("shop_field").agg(Total_DiaInch=("joint_size", "sum")).reset_index()
     )
+    _pss_cols = ["spool_key", "wo_no", "batch_no", "zone", "material_group", "iso_dwg_no",
+                 "line_no", "dwg_spool_no", "iso_run_no", "paint_system", "paint_status",
+                 "Spool Status"]
     pipe_spool_summary = df_shop.drop_duplicates(subset=["spool_key"])[
-        ["spool_key", "wo_no", "zone", "material_group", "iso_dwg_no", "line_no",
-         "dwg_spool_no", "iso_run_no", "paint_system", "Spool Status"]
+        [c for c in _pss_cols if c in df_shop.columns]
     ]
 
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        status_summary.to_excel(writer, index=False, sheet_name="Summary")
         df_final.to_excel(writer, index=False, sheet_name="All Spools")
         pipe_spool_summary.to_excel(writer, index=False, sheet_name="Pipe Spool Summary")
         shop_field_summary.to_excel(writer, index=False, sheet_name="Shop and Field")
-        for status in df_shop["Spool Status"].dropna().unique():
-            df_shop[df_shop["Spool Status"] == status].to_excel(
-                writer, index=False, sheet_name=str(status)[:31]
-            )
+        for status in _STATUS_ORDER:
+            part = df_shop[df_shop["Spool Status"] == status]
+            if not part.empty:
+                part.to_excel(writer, index=False, sheet_name=status[:31])
         wb = writer.book
+        _write_summary_sheet(wb, status_summary)      # proper, formatted, tab 1
         for name in wb.sheetnames:
             if name != "Summary":
                 _format_sheet(wb[name])
     return buf.getvalue()
+
+
+def _write_summary_sheet(wb, summ: pd.DataFrame) -> None:
+    """Formatted Summary tab: title, colour-keyed status rows, TOTAL row."""
+    ws = wb.create_sheet("Summary", 0)
+    thin = Side(border_style="thin", color="BFBFBF")
+    box = Border(top=thin, bottom=thin, left=thin, right=thin)
+    headers = list(summ.columns)
+    HR = 4                                            # header row
+
+    ws["A1"] = "CLASSIFIED SPOOLS  —  SUMMARY"
+    ws["A1"].font = Font(bold=True, size=14, color="1F4E79")
+    ws["A2"] = (f"Generated {datetime.now(MYT):%Y-%m-%d %H:%M} MYT   ·   "
+                "shop spools plus straight pipe / sent-to-site")
+    ws["A2"].font = Font(italic=True, size=9, color="808080")
+
+    for j, h in enumerate(headers, 1):
+        c = ws.cell(HR, j, h)
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", start_color="1F4E79")
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.border = box
+
+    r = HR + 1
+    for _, row in summ.iterrows():
+        for j, h in enumerate(headers, 1):
+            c = ws.cell(r, j, row[h])
+            c.border = box
+            c.alignment = Alignment(horizontal="left" if h == "Spool Status" else "center")
+            if h == "Dia-Inch":
+                c.number_format = "#,##0.00"
+            elif h.startswith("%"):
+                c.number_format = '0.0"%"'
+            elif h in ("Pipe Spools", "Joints"):
+                c.number_format = "#,##0"
+        code = _FILL_COLORS.get(row["Spool Status"], "FFFFFF")
+        ws.cell(r, 1).fill = PatternFill("solid", start_color=code)
+        r += 1
+
+    ws.cell(r, 1, "TOTAL").font = Font(bold=True)
+    ws.cell(r, 1).border = box
+    for j, h in enumerate(headers[1:], 2):
+        col = ws.cell(HR, j).column_letter
+        cell = ws.cell(r, j)
+        if h.startswith("%"):
+            cell.value = 100.0
+            cell.number_format = '0.0"%"'
+        else:
+            cell.value = f"=SUM({col}{HR + 1}:{col}{r - 1})"
+            cell.number_format = "#,##0.00" if h == "Dia-Inch" else "#,##0"
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = box
+
+    for j, h in enumerate(headers, 1):
+        ws.column_dimensions[ws.cell(HR, j).column_letter].width = \
+            max(len(h) + 4, 22 if h == "Spool Status" else 13)
+    ws.freeze_panes = f"A{HR + 1}"
 
 
 # ----------------------------------------------------------------------
