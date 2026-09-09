@@ -15,10 +15,13 @@ separate URL, separate backups.
    `team-piping-<code>`). Save the **database password**.
 2. **SQL Editor** → paste all of `supabase/schema.sql` → **Run**
    (creates every table empty, RLS on).
-3. Still in SQL Editor, seed the first admin:
+3. Still in SQL Editor, seed the first admin (safe to re-run — updates the
+   password if `admin` already exists):
    ```sql
    insert into public.user_credentials (username, password, permission)
-   values ('admin', 'a-strong-password', 'all');
+   values ('admin', 'a-strong-password', 'all')
+   on conflict (username) do update
+     set password = excluded.password, permission = excluded.permission;
    ```
 4. **Connect** button → **Session pooler** → copy the URI. It looks like
    `postgresql://postgres.<ref>:<PW>@aws-0-<region>.pooler.supabase.com:5432/postgres`.
