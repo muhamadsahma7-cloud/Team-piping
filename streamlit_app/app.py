@@ -1592,24 +1592,46 @@ def page_scan() -> None:
         st.info("Scan a spool's QR label with your phone camera, or key its code above.")
         return
 
-    js = db.query(
-        """SELECT id, joint_no, joint_size,
-                  coalesce(wo_no,'')          AS wo_no,
-                  coalesce(batch_no,'')       AS batch_no,
-                  coalesce(iso_dwg_no,'')     AS iso_dwg_no,
-                  coalesce(line_no,'')        AS line_no,
-                  coalesce(iso_run_no,'')     AS iso_run_no,
-                  coalesce(dwg_spool_no,'')   AS dwg_spool_no,
-                  coalesce(material_group,'') AS material_group,
-                  coalesce(fitup_date,'')     AS fitup_date,
-                  coalesce(welding_date,'')   AS welding_date
-             FROM spools WHERE qr_id = :c
-            ORDER BY joint_no""",
-        {"c": code}, ttl=0,
-    )
+    try:
+        js = db.query(
+            """SELECT id, joint_no, joint_size,
+                      coalesce(wo_no,'')          AS wo_no,
+                      coalesce(batch_no,'')       AS batch_no,
+                      coalesce(iso_dwg_no,'')     AS iso_dwg_no,
+                      coalesce(line_no,'')        AS line_no,
+                      coalesce(iso_run_no,'')     AS iso_run_no,
+                      coalesce(dwg_spool_no,'')   AS dwg_spool_no,
+                      coalesce(material_group,'') AS material_group,
+                      coalesce(fitup_date,'')     AS fitup_date,
+                      coalesce(welding_date,'')   AS welding_date
+                 FROM spools WHERE qr_id = :c
+                ORDER BY joint_no""",
+            {"c": code}, ttl=0,
+        )
+    except Exception as e:
+        if "qr_id" in str(e).lower():
+            st.error("This database isn't set up for QR yet. Run "
+                     "**supabase/qr_feature.sql** in Supabase, then assign codes "
+                     "on the **QR labels** page.")
+        else:
+            st.error(f"Lookup failed: {e}")
+        return
+
     if js.empty:
-        st.error(f"No spool carries code **{code}**. Check the label, or ask the "
-                 "office to (re)generate it on **QR labels**.")
+        try:
+            total = int(db.query("SELECT count(*) n FROM spools "
+                                 "WHERE coalesce(qr_id,'')<>''", ttl=0).iloc[0]["n"])
+        except Exception:
+            total = 0
+        if total == 0:
+            st.warning("No QR codes have been assigned yet. On the **QR labels** "
+                       "page (admin) click **Assign / top-up codes**, then build "
+                       "and print a fresh sheet.")
+        else:
+            st.error(f"Code **{code}** isn't in the database ({total:,} spools do "
+                     "have codes). Make sure the label came from **this** site's "
+                     "QR labels page — not an older or sample sheet — or re-assign "
+                     "and reprint.")
         return
 
     uniq = lambda col: ", ".join(sorted({x for x in js[col] if x})) or "—"
