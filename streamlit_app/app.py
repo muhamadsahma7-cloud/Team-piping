@@ -722,14 +722,33 @@ def page_overview() -> None:
             """,
             {"asof": asof.isoformat()}, ttl=30,
         )
+        sp = db.query(
+            f"""
+            WITH s AS (
+                SELECT coalesce(nullif(trim({dim}::text),''),'(blank)') AS k,
+                       bool_and(coalesce(welding_date ~ '{_ISO}'
+                         AND substr(welding_date,1,10) <= :asof, false)) AS welded
+                FROM spools
+                GROUP BY coalesce(nullif(trim({dim}::text),''),'(blank)'),
+                         iso_dwg_no, line_no, iso_run_no, dwg_spool_no
+            )
+            SELECT k AS "{dim}", count(*) AS spools,
+                   count(*) FILTER (WHERE welded) AS spool_done
+            FROM s GROUP BY 1
+            """,
+            {"asof": asof.isoformat()}, ttl=30,
+        )
+        d = d.merge(sp, on=dim, how="left")
         for cc in ("joints", "dia_inch", "fitup_di", "welding_di"):
             d[cc] = d[cc].astype(float)
+        for cc in ("spools", "spool_done"):
+            d[cc] = d[cc].fillna(0).astype(int)
         di = d["dia_inch"].where(d["dia_inch"] > 0)
         d["fitup_bal"] = (d["dia_inch"] - d["fitup_di"]).round(2)
         d["welding_bal"] = (d["dia_inch"] - d["welding_di"]).round(2)
         d["fitup_%"] = (d["fitup_di"] / di * 100).round(1).fillna(0)
         d["welding_%"] = (d["welding_di"] / di * 100).round(1).fillna(0)
-        return d[[dim, "joints", "dia_inch",
+        return d[[dim, "spools", "spool_done", "joints", "dia_inch",
                   "fitup_di", "fitup_bal", "fitup_%",
                   "welding_di", "welding_bal", "welding_%"]]
 
