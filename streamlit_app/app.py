@@ -228,8 +228,9 @@ div[data-testid="stMetric"] label p{color:var(--muted);font-weight:500}
   max-width:none!important;-webkit-line-clamp:unset!important}
 [data-testid="stMetricLabel"] p{font-size:.9rem;font-weight:600;line-height:1.3}
 [data-testid="stMetricValue"],[data-testid="stMetricValue"] *{
-  white-space:nowrap!important;overflow:visible!important;
+  white-space:nowrap!important;overflow:visible!important;color:var(--ink)!important;
   font-size:clamp(1.05rem,1.7vw,1.5rem)!important;font-variant-numeric:tabular-nums}
+[data-testid="stMetricDelta"],[data-testid="stMetricDelta"] *{color:var(--muted)!important}
 .stButton>button,.stDownloadButton>button,.stForm button{border-radius:9px;font-weight:600}
 .stDownloadButton>button{padding:.7rem 1.1rem;font-size:1rem;min-height:3rem}
 .stDownloadButton>button[kind="primary"]{box-shadow:0 4px 16px var(--dlshadow)}
@@ -252,14 +253,11 @@ _FORCE_TMPL = """
 h1,h2,h3,h4{color:@ink@!important}
 [data-testid="stExpander"]{background:@panel@!important;border:1px solid @line@!important}
 [data-testid="stExpander"] summary,[data-testid="stExpander"] summary *{color:@text@!important}
-[data-testid="stDataFrame"],[data-testid="stDataFrameResizable"],
-.glideDataEditor,.dvn-scroller{
-  --gdg-bg-cell:@cell@;--gdg-bg-cell-medium:@cell2@;--gdg-bg-header:@hdr@;
-  --gdg-bg-header-hovered:@hdr2@;--gdg-bg-header-has-focus:@hdr2@;
-  --gdg-text-dark:@text@;--gdg-text-medium:@muted@;--gdg-text-header:@text@;
-  --gdg-text-header-selected:@text@;--gdg-border-color:@line@;
-  --gdg-horizontal-border-color:@line@;--gdg-accent-color:@accent@;
-  background:@cell@!important}
+/* Leave st.dataframe (glide-data-grid) fully on Streamlit's own theme.
+   Forcing only the background used to leave dark numbers on a dark cell
+   when the in-app toggle flipped the page but not Streamlit's theme. */
+[data-testid="stDataFrame"] [data-testid="StyledDataFrameDataCell"],
+[data-testid="stStyledTable"] td,[data-testid="stTable"] td{color:@text@!important}
 """
 
 
@@ -269,8 +267,7 @@ def inject_css() -> None:
     tok = _TOK_DARK if dark else _TOK_LIGHT
     root = ":root{" + "".join(f"--{k}:{v};" for k, v in tok.items()) + "}"
     force = _FORCE_TMPL
-    for k in ("bg", "text", "ink", "panel", "line", "cell", "cell2", "hdr",
-              "hdr2", "muted", "accent"):
+    for k in ("bg", "text", "ink", "panel", "line", "muted", "accent"):
         force = force.replace(f"@{k}@", tok[k])
     st.markdown("<style>" + root + "\n" + _STATIC_CSS + "\n" + force + "</style>",
                 unsafe_allow_html=True)
