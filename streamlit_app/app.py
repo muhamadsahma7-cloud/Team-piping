@@ -282,15 +282,23 @@ def login_gate() -> None:
             unsafe_allow_html=True,
         )
         st.subheader("Sign in")
+        _projs = db.project_list()
         with st.form("login"):
+            proj = (st.selectbox("Project", list(_projs)) if _projs else None)
             u = st.text_input("Username")
             p = st.text_input("Password", type="password")
             ok = st.form_submit_button("Sign in", use_container_width=True)
     if ok:
+        if _projs:
+            st.session_state["conn_name"] = _projs[proj]
+            st.session_state["project"] = proj
         perm = db.check_login(u.strip(), p)
         if perm is None:
+            st.session_state.pop("conn_name", None)
+            st.session_state.pop("project", None)
             st.error("Invalid username or password.")
         else:
+            st.cache_data.clear()          # drop any prior project's cached data
             st.session_state["user"] = u.strip()
             st.session_state["permission"] = perm
             st.session_state["just_logged_in"] = True
@@ -491,6 +499,7 @@ def sidebar_clock() -> None:
     if la is not None:
         idle = time.time() - la
         if idle >= IDLE_LIMIT_S:
+            st.cache_data.clear()
             st.session_state.clear()
             st.session_state["just_logged_out"] = True
             st.session_state["logout_reason"] = "idle"
@@ -518,8 +527,11 @@ def sidebar_clock() -> None:
 with st.sidebar:
     st.session_state["last_active"] = time.time()   # every real (interaction) rerun
     st.markdown(BRAND_HTML, unsafe_allow_html=True)
+    if st.session_state.get("project"):
+        st.caption(f"Project: **{st.session_state['project']}**")
     st.caption(f"Signed in as **{st.session_state['user']}**")
     if st.button("Sign out", use_container_width=True):
+        st.cache_data.clear()
         st.session_state.clear()
         st.session_state["just_logged_out"] = True
         st.rerun()

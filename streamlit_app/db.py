@@ -13,11 +13,30 @@ import streamlit as st
 from sqlalchemy import text
 
 
+DEFAULT_CONN = "supabase"
+
+
+def project_list() -> dict:
+    """{display name: connection name} from secrets `[projects]`.
+    Empty -> single-project deployment (everything uses `supabase`)."""
+    try:
+        return {str(k): str(v) for k, v in dict(st.secrets.get("projects", {})).items()}
+    except Exception:
+        return {}
+
+
+def _conn_name() -> str:
+    return st.session_state.get("conn_name", DEFAULT_CONN)
+
+
 @st.cache_resource
+def _conn_for(name: str):
+    # Streamlit's SQLConnection: pools, reconnects, reads [connections.<name>].
+    return st.connection(name, type="sql")
+
+
 def _conn():
-    # Streamlit's SQLConnection: pools, reconnects, and reads
-    # [connections.supabase] from secrets.toml.
-    return st.connection("supabase", type="sql")
+    return _conn_for(_conn_name())
 
 
 def query(sql: str, params: dict | None = None, ttl: int = 60) -> pd.DataFrame:

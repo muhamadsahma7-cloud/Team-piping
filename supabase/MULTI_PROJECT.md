@@ -1,10 +1,40 @@
 # Running the app for more than one project
 
-Model: **one Supabase database per project, its own `user_credentials`.**
-Same GitHub repo, one Streamlit Cloud app per project. No code changes.
+Model: **one Supabase database per project, each with its own
+`user_credentials`.** Nothing is shared between projects — separate
+database, separate users, separate backups.
 
-Nothing is shared between projects — separate database, separate users,
-separate URL, separate backups.
+You can serve them from **one website** (recommended) or from a separate
+Streamlit deployment per project.
+
+---
+
+## One website, project picker at sign-in  (recommended)
+
+The app already supports this. In `streamlit_app/.streamlit/secrets.toml`
+(or the Streamlit Cloud **Secrets** box) add a `[projects]` table and one
+`[connections.<name>]` block per Supabase database:
+
+```toml
+[projects]
+"PM0045 - Prefchem UG" = "supabase"
+"PM0100 - Next Job"     = "supabase_pm0100"
+
+[connections.supabase]
+url = "postgresql+psycopg2://postgres.<ref-A>:<pw-A>@aws-0-<region>.pooler.supabase.com:5432/postgres"
+
+[connections.supabase_pm0100]
+url = "postgresql+psycopg2://postgres.<ref-B>:<pw-B>@aws-0-<region>.pooler.supabase.com:5432/postgres"
+```
+
+The sign-in screen then shows a **Project** dropdown. After the user
+picks one, the login is checked against **that project's**
+`user_credentials`, and every query, import, snapshot and setting for the
+session runs on that database. Signing out (or the 30-min idle timeout)
+clears the choice and the cache, so the next person picks again.
+
+Still create each project's Supabase database and seed its admin exactly
+as below — only the deployment step changes (one app instead of many).
 
 ---
 
@@ -27,18 +57,17 @@ separate URL, separate backups.
    `postgresql://postgres.<ref>:<PW>@aws-0-<region>.pooler.supabase.com:5432/postgres`.
    Percent-encode any special characters in the password (`@` → `%40`, …).
 
-### 2. New Streamlit Cloud app (same repo)
-1. share.streamlit.io → **Create app** → repo
-   `muhamadsahma7-cloud/team-piping`, branch `main`,
-   **Main file `streamlit_app/app.py`**, Python 3.12.
-2. **Advanced → Secrets**:
-   ```toml
-   [connections.supabase]
-   url = "postgresql+psycopg2://postgres.<ref>:<PW-encoded>@aws-0-<region>.pooler.supabase.com:5432/postgres"
-   ```
-   (add the `+psycopg2` prefix)
-3. **Deploy** → you get a second URL (e.g. `team-piping-<code>.streamlit.app`).
-4. App menu **⋮ → Settings → Sharing** → limit to that project's team emails.
+### 2. Wire it into the website
+**One website:** open your existing Streamlit Cloud app → **⋮ → Settings →
+Secrets** → add the new `[connections.<name>]` block and a `[projects]`
+line for it (see the top of this file). Save; the app reboots and the new
+project appears in the sign-in dropdown.
+
+**Separate deployment instead:** share.streamlit.io → **Create app** →
+repo `muhamadsahma7-cloud/team-piping`, branch `main`, main file
+`streamlit_app/app.py`, Python 3.12 → Secrets = just
+`[connections.supabase] url = "…new project…"` → Deploy → restrict Sharing
+to that team.
 
 ### 3. Load the project's data
 Sign in as `admin` on the new URL, then:
@@ -64,17 +93,3 @@ Sign in as `admin` on the new URL, then:
   (Dashboard → Database → Backups) and its own in-app `backup_spools_*`
   snapshots.
 
----
-
-## If you'd rather have one URL
-
-A single app can pick the project at login instead:
-- Put one block per project in `secrets.toml`
-  (`[connections.pm0045]`, `[connections.pm0100]`, …).
-- Add a **Project** dropdown on the sign-in screen; store the choice in
-  `st.session_state`.
-- `db.py` uses `st.connection(f"…{chosen}")` for every call; login then
-  validates against that project's `user_credentials`.
-
-~30 lines. Ask and it can be added — but a deployment per project is
-simpler to run and keeps the isolation absolute.
