@@ -504,7 +504,7 @@ PAGE_PERMS = {
     "Work order summary": [],
     "Update progress": ["Update Fit-Up", "Update Welding"],
     "Scan & update": ["Field Scan", "Update Fit-Up", "Update Welding"],
-    "Field workers": ["Field Scan"],
+    "Field workers": [ADMIN],
     "QR labels": [ADMIN],
     "Delivery": ["Painting Delivery", "Site Delivery"],
     "Spools": [],
@@ -521,6 +521,11 @@ PAGE_PERMS = {
 def can_see(page: str, perm: str) -> bool:
     if perm == "all":
         return True
+    have = {t.strip() for t in str(perm or "").split(",") if t.strip()}
+    # a pure shop-floor account (only "Field Scan") sees the scan page and
+    # nothing else - no read-only tabs, no roster
+    if have == {"Field Scan"}:
+        return page == "Scan & update"
     toks = PAGE_PERMS.get(page, [])
     if not toks:
         return True
@@ -1485,6 +1490,48 @@ def _field_workers(trade_needed: str) -> pd.DataFrame:
     )
 
 
+def _register_worker_form(*, key: str, fixed_trade: str | None = None) -> None:
+    """Shared 'register a fitter / welder' form (roster page + inline on scan)."""
+    with st.form(key, clear_on_submit=True):
+        c = st.columns(2)
+        name = c[0].text_input("Full name")
+        trade = (fixed_trade if fixed_trade
+                 else c[1].selectbox("Trade", ["Fitter", "Welder", "Both"]))
+        c2 = st.columns(2)
+        stamp = c2[0].text_input("Stamp / stencil no (optional)")
+        phone = c2[1].text_input("Phone (optional)")
+        c3 = st.columns(2)
+        pin1 = c3[0].text_input("Choose a PIN (4-6 digits)", type="password", max_chars=6)
+        pin2 = c3[1].text_input("Confirm PIN", type="password", max_chars=6)
+        go = st.form_submit_button("Register", type="primary")
+    if not go:
+        return
+    nm = (name or "").strip()
+    p1, p2 = (pin1 or "").strip(), (pin2 or "").strip()
+    if not nm:
+        st.warning("Enter a name.")
+    elif not (p1.isdigit() and 4 <= len(p1) <= 6):
+        st.warning("PIN must be 4 to 6 digits.")
+    elif p1 != p2:
+        st.warning("The two PINs don't match.")
+    else:
+        try:
+            db.execute(
+                """INSERT INTO field_workers (name, trade, stamp_no, phone, pin)
+                   VALUES (:n, :t, :s, :ph, :pin)""",
+                {"n": nm, "t": trade, "s": stamp.strip() or None,
+                 "ph": phone.strip() or None, "pin": p1},
+            )
+            st.cache_data.clear()
+            st.success(f"Registered {nm} ({trade}).")
+            st.rerun()
+        except Exception as e:
+            if "uq_field_workers" in str(e) or "duplicate" in str(e).lower():
+                st.error(f"{nm} is already registered as {trade}.")
+            else:
+                st.error(f"Could not register: {e}")
+
+
 def _scan_history(code: str) -> None:
     h = db.query(
         """SELECT activity,
@@ -1577,8 +1624,13 @@ def page_scan() -> None:
     picked = st.multiselect(f"Joints to mark {activity} complete", elig, default=elig)
     trade = "Fitter" if activity == "Fit-Up" else "Welder"
     fw = _field_workers(trade)
+
+    with st.expander(f"➕ New {trade.lower()}? Register your name"):
+        _register_worker_form(key=f"reg_scan_{trade}", fixed_trade=trade)
+
     if fw.empty:
-        st.warning(f"No registered {trade.lower()} yet — open **Field workers** first.")
+        st.warning(f"No registered {trade.lower()} yet — register above, then it "
+                   "appears here.")
         return
     who = st.selectbox(f"{trade} name", fw["name"].tolist())
     pin = st.text_input("Your PIN", type="password", max_chars=6)
@@ -1629,47 +1681,12 @@ def page_scan() -> None:
 
 def page_field_workers() -> None:
     st.header("🦺 Field workers")
-    st.caption("Fitters and welders register once. The name + PIN signs every "
-               "QR scan done on the shop floor.")
+    st.caption("The shop-floor roster. Fitters and welders can also self-register "
+               "from the Scan & update screen; the name + PIN signs every scan.")
     is_admin = st.session_state.get("permission", "") == "all"
 
-    with st.form("reg_fw", clear_on_submit=True):
-        st.subheader("Register")
-        c = st.columns(2)
-        name = c[0].text_input("Full name")
-        trade = c[1].selectbox("Trade", ["Fitter", "Welder", "Both"])
-        c2 = st.columns(2)
-        stamp = c2[0].text_input("Stamp / stencil no (optional)")
-        phone = c2[1].text_input("Phone (optional)")
-        c3 = st.columns(2)
-        pin1 = c3[0].text_input("Choose a PIN (4-6 digits)", type="password", max_chars=6)
-        pin2 = c3[1].text_input("Confirm PIN", type="password", max_chars=6)
-        go = st.form_submit_button("Register", type="primary")
-    if go:
-        nm = (name or "").strip()
-        p1, p2 = (pin1 or "").strip(), (pin2 or "").strip()
-        if not nm:
-            st.warning("Enter a name.")
-        elif not (p1.isdigit() and 4 <= len(p1) <= 6):
-            st.warning("PIN must be 4 to 6 digits.")
-        elif p1 != p2:
-            st.warning("The two PINs don't match.")
-        else:
-            try:
-                db.execute(
-                    """INSERT INTO field_workers (name, trade, stamp_no, phone, pin)
-                       VALUES (:n, :t, :s, :ph, :pin)""",
-                    {"n": nm, "t": trade, "s": stamp.strip() or None,
-                     "ph": phone.strip() or None, "pin": p1},
-                )
-                st.cache_data.clear()
-                st.success(f"Registered {nm} ({trade}).")
-                st.rerun()
-            except Exception as e:
-                if "uq_field_workers" in str(e) or "duplicate" in str(e).lower():
-                    st.error(f"{nm} is already registered as {trade}.")
-                else:
-                    st.error(f"Could not register: {e}")
+    st.subheader("Register")
+    _register_worker_form(key="reg_fw")
 
     st.divider()
     st.subheader("Registered")
@@ -2234,7 +2251,7 @@ GATED_TABS = {
     "Targets & plan": {"Targets & plan": "Targets"},
     "Update progress": {"Fit-Up updates": "Update Fit-Up",
                         "Welding updates": "Update Welding"},
-    "Scan & update (QR)": {"Scan & register field workers": "Field Scan"},
+    "Scan & update (QR)": {"Shop-floor QR scan (this tab only)": "Field Scan"},
     "Delivery": {"Painting delivery": "Painting Delivery",
                  "Site delivery": "Site Delivery"},
     "Manpower": {"Manpower entry": "Manpower Report"},
@@ -2262,7 +2279,9 @@ def page_users() -> None:
 
     st.caption("Every user can open the view-only tabs ("
                + ", ".join(_ALWAYS_TABS)
-               + "). The tabs below are the ones you can grant per user.")
+               + "). The tabs below are the ones you can grant per user. "
+               "Exception: an account with **only** the shop-floor QR scan "
+               "grant sees the Scan & update tab and nothing else.")
 
     users = db.query(
         "SELECT username, password, permission FROM user_credentials ORDER BY username",
