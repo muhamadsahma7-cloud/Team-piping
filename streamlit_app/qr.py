@@ -59,7 +59,7 @@ def _font(size: int):
         return ImageFont.load_default()
 
 
-LABEL_W_CM, LABEL_H_CM = 8.5, 5.2                     # landscape sticker / border
+LABEL_W_CM, LABEL_H_CM = 8.0, 5.2                     # landscape sticker / border
 
 _last_pages: list = []                                # last render, for previews
 
@@ -67,6 +67,11 @@ _last_pages: list = []                                # last render, for preview
 def _text_h(draw, text, font) -> int:
     b = draw.textbbox((0, 0), text or "X", font=font)
     return b[3] - b[1]
+
+
+def _bold(draw, xy, text, font, fill="black", sw: int = 1) -> None:
+    """Pseudo-bold: the default PIL font has no bold face, so thicken it."""
+    draw.text(xy, text, font=font, fill=fill, stroke_width=sw, stroke_fill=fill)
 
 
 def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> bytes:
@@ -93,19 +98,19 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
     from PIL import Image, ImageDraw
 
     DPI = 150
-    W = round(LABEL_W_CM / 2.54 * DPI)                # 502
-    H = round(LABEL_H_CM / 2.54 * DPI)                # 307
+    W = round(LABEL_W_CM / 2.54 * DPI)                # 8.0 cm
+    H = round(LABEL_H_CM / 2.54 * DPI)                # 5.2 cm
 
-    f_lbl = _font(12)
+    f_lbl = _font(13)
     f_val = _font(16)
     f_val_sm = _font(13)
     f_wo = _font(13)
     f_code = _font(10)
-    f_titles = [_font(s) for s in (30, 26, 23, 20, 17, 15)]
+    f_titles = [_font(s) for s in (28, 25, 22, 19, 16, 14)]
 
     STRIP = 22                                        # vertical WO column
     TITLE_H = 44
-    LBL_W = 104                                       # label column width
+    LBL_W = 100                                       # label column width
     GAP = 8
 
     def _clip(s: str, n: int) -> str:
@@ -125,9 +130,9 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
         # ---- vertical WO strip, left edge (WO number only) ----
         wo = _v("wo")
         wo_txt = "WO-" + wo if wo != "-" else "WO -"
-        st_img = Image.new("RGB", (H - 12, STRIP - 3), "white")
-        ImageDraw.Draw(st_img).text((2, 1), wo_txt, fill="black", font=f_wo)
-        page.paste(st_img.rotate(90, expand=True), (3, 6))
+        st_img = Image.new("RGB", (H - 12, STRIP - 2), "white")
+        _bold(ImageDraw.Draw(st_img), (2, 0), wo_txt, f_wo)
+        page.paste(st_img.rotate(90, expand=True), (2, 6))
         d.line([(STRIP, 2), (STRIP, H - 2)], fill="black", width=1)
 
         x0 = STRIP
@@ -137,10 +142,10 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
         d.rectangle([x0, 2, W - 3, 2 + TITLE_H], outline="black", width=2)
         title = _v("iso")
         tf = next((f for f in f_titles
-                   if d.textlength(title, font=f) <= inner_w - 16), f_titles[-1])
-        d.text((x0 + (inner_w - d.textlength(title, font=tf)) / 2,
-                2 + (TITLE_H - _text_h(d, title, tf)) / 2 - 2),
-               title, fill="black", font=tf)
+                   if d.textlength(title, font=f) <= inner_w - 18), f_titles[-1])
+        _bold(d, (x0 + (inner_w - d.textlength(title, font=tf)) / 2,
+                  2 + (TITLE_H - _text_h(d, title, tf)) / 2 - 2),
+              title, tf)
 
         body_y0 = 2 + TITLE_H
         # ---- QR box, right ----
@@ -177,11 +182,11 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
             yy = body_y0 + k * rh
             if k:
                 d.line([(x0, yy), (qx0, yy)], fill="black", width=1)
-            d.text((x0 + 6, yy + (rh - _text_h(d, lbl, f_lbl)) / 2 - 1),
-                   lbl, fill="black", font=f_lbl)
+            _bold(d, (x0 + 6, yy + (rh - _text_h(d, lbl, f_lbl)) / 2 - 1),
+                  lbl, f_lbl)
             vf = f_val if len(val) <= val_chars else f_val_sm
-            d.text((x0 + LBL_W + GAP, yy + (rh - _text_h(d, val, vf)) / 2 - 1),
-                   _clip(val, val_chars + 4), fill="black", font=vf)
+            _bold(d, (x0 + LBL_W + GAP, yy + (rh - _text_h(d, val, vf)) / 2 - 1),
+                  _clip(val, val_chars + 4), vf)
 
     if not pages:
         pages = [Image.new("RGB", (W, H), "white")]
