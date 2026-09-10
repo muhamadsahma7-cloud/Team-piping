@@ -106,7 +106,7 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
     f_val = _font(px(16))
     f_val_sm = _font(px(13))
     f_wo = _font(px(13))
-    f_code = _font(px(10))
+    f_code = _font(px(16))
     f_titles = [_font(px(s)) for s in (28, 25, 22, 19, 16, 14)]
 
     STRIP = px(22)                                    # vertical WO column
@@ -153,9 +153,10 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
         # ---- QR box, right ----
         qx0 = x0 + int(inner_w * 0.52)
         d.rectangle([qx0, body_y0, W - BW, H - BW], outline="black", width=BW)
-        code_h = _text_h(d, "A0", f_code) + px(6)
+        code = str(r.get("qr_id", ""))
+        code_h = _text_h(d, code, f_code) + px(16)    # reserved strip at the bottom
         box_w, box_h = W - BW - qx0, H - BW - body_y0
-        q = min(box_w - px(14), box_h - code_h - px(12))
+        q = min(box_w - px(14), box_h - code_h - px(10))
         raw = (qrcode.make(scan_url(base_url, r["qr_id"], kiosk_token), border=2)
                .get_image().convert("L"))
         scale = max(1, q // raw.width)                # crisp integer upscale
@@ -163,9 +164,9 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
         qw = qimg.width
         page.paste(qimg, (qx0 + (box_w - qw) // 2,
                           body_y0 + max(px(6), (box_h - code_h - qw) // 2)))
-        code = str(r.get("qr_id", ""))
         _txt(d, (qx0 + (box_w - d.textlength(code, font=f_code)) / 2,
-                  H - BW - code_h + px(2)), code, f_code, fill="#555555")
+                 H - BW - code_h + (code_h - _text_h(d, code, f_code)) / 2 - px(4)),
+             code, f_code, fill="#444444")
 
         # ---- field table, left ----
         fields = [
