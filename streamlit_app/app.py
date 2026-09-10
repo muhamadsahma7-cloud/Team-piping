@@ -1521,6 +1521,7 @@ def _ensure_qr_schema() -> bool:
         "ALTER TABLE public.spools ADD COLUMN IF NOT EXISTS qr_id text",
         "ALTER TABLE public.spools ADD COLUMN IF NOT EXISTS fitup_by text",
         "ALTER TABLE public.spools ADD COLUMN IF NOT EXISTS welding_by text",
+        "ALTER TABLE public.spools ADD COLUMN IF NOT EXISTS welder_no text",
         "DROP INDEX IF EXISTS public.uq_spools_qr_id",          # was UNIQUE in v1
         "CREATE INDEX IF NOT EXISTS idx_spools_qr_id ON public.spools (qr_id)",
         """CREATE TABLE IF NOT EXISTS public.field_workers (
@@ -1825,8 +1826,11 @@ def page_scan() -> None:
 
         seq = " AND coalesce(fitup_date,'') <> '' " if activity == "Welding" else ""
         by_col = "fitup_by" if activity == "Fit-Up" else "welding_by"
+        # also stamp the welder's Welder No. onto the spool, beside
+        # capping_welder_no, when it's a welding update
+        extra_set = ", welder_no = :sn" if activity == "Welding" else ""
         one = (
-            f"WITH upd AS ( UPDATE spools SET {col} = :d, {by_col} = :wn "
+            f"WITH upd AS ( UPDATE spools SET {col} = :d, {by_col} = :wn{extra_set} "
             f"WHERE qr_id = :c AND joint_no = :j AND coalesce({col},'') = '' {seq} "
             "RETURNING id ) "
             "INSERT INTO field_updates (spool_id, qr_id, joint_no, activity, "

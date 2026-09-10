@@ -68,6 +68,7 @@ create table if not exists public.spools (
     welding_inspection_date  text,
     root_welder_no           text,
     capping_welder_no        text,
+    welder_no                text,               -- welder's stencil/Welder No. (QR scan)
     visual_report_no         text,
     rt_bsr_date              text,
     rt_bsr_report_no         text,
@@ -263,6 +264,7 @@ create index if not exists idx_qc_wcs_uploaded_at on public.qc_wcs_docs (uploade
 alter table public.spools add column if not exists qr_id text;
 alter table public.spools add column if not exists fitup_by text;    -- fitter name
 alter table public.spools add column if not exists welding_by text;  -- welder name
+alter table public.spools add column if not exists welder_no text;   -- welder's stencil no
 drop index if exists public.uq_spools_qr_id;
 create index if not exists idx_spools_qr_id on public.spools (qr_id);
 

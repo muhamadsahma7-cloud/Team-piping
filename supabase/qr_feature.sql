@@ -19,10 +19,12 @@ alter table public.spools add column if not exists qr_id text;
 drop index if exists public.uq_spools_qr_id;          -- was unique in the first draft
 create index if not exists idx_spools_qr_id on public.spools (qr_id);
 
--- the fitter / welder name gets written onto the spool row too, next to
--- the date, when progress is recorded from a scan
+-- the fitter / welder name (and, for a welder, his stencil/Welder No.,
+-- next to the existing capping_welder_no) gets written onto the spool
+-- row too, next to the date, when progress is recorded from a scan
 alter table public.spools add column if not exists fitup_by text;
 alter table public.spools add column if not exists welding_by text;
+alter table public.spools add column if not exists welder_no text;
 
 -- ---------------------------------------------------------------------
 -- field_workers - a fitter / welder registers his own name once
