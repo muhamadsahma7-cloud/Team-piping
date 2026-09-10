@@ -153,6 +153,7 @@ BRAND_HTML = (
 
 PAGE_ICONS = {
     "Overview": "📊", "Targets & plan": "🎯", "Work order summary": "📋",
+    "Weekly report": "🗓️",
     "Update progress": "✏️", "Scan & update": "📲", "Field workers": "🦺",
     "QR labels": "🏷️", "Delivery": "🚚", "Spools": "🔩",
     "Classify & export": "🗂️", "QC WCS": "🧾", "Inventory": "📦", "Manpower": "👷",
@@ -527,6 +528,7 @@ PAGE_PERMS = {
     "Overview": [],
     "Targets & plan": ["Targets"],
     "Work order summary": [],
+    "Weekly report": [],
     "Update progress": ["Update Fit-Up", "Update Welding"],
     "Scan & update": ["Field Scan", "Update Fit-Up", "Update Welding"],
     "Field workers": [ADMIN],
@@ -1276,6 +1278,233 @@ SELECT
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
      AND coalesce(trim(welding_inspection_date),'')<>'')                                          AS weld_insp
 """
+
+
+def page_weekly() -> None:
+    st.header("🗓️ Weekly report")
+
+    cfg = db.get_settings()
+    today = date.today()
+    this_mon = today - timedelta(days=today.weekday())
+
+    c = st.columns([1, 1.4, 2])
+    quick = c[0].selectbox("Week", ["This week", "Last week", "Custom"],
+                           label_visibility="collapsed")
+    if quick == "This week":
+        wk_start = this_mon
+    elif quick == "Last week":
+        wk_start = this_mon - timedelta(days=7)
+    else:
+        wk_start = c[1].date_input("Any day in the week", value=this_mon,
+                                   format="DD/MM/YYYY", label_visibility="collapsed")
+    wk_start = wk_start - timedelta(days=wk_start.weekday())      # snap to Monday
+    wk_end = wk_start + timedelta(days=6)
+    s, e = wk_start.isoformat(), wk_end.isoformat()
+    label = f"{wk_start:%d %b} – {wk_end:%d %b %Y}"
+    c[2].markdown(f"### {label}")
+    if wk_end > today:
+        st.caption("This week isn't finished yet — figures are partial, as of today.")
+
+    kf = db.query(
+        f"""WITH sp AS (
+              SELECT iso_dwg_no, line_no, iso_run_no, dwg_spool_no,
+                     sum(joint_size) AS di,
+                     bool_and(coalesce(welding_date ~ '{_ISO}', false))    AS welded,
+                     max(CASE WHEN welding_date ~ '{_ISO}'
+                              THEN substr(welding_date,1,10) END)          AS last_weld
+                FROM spools WHERE shop_field='S'
+               GROUP BY 1, 2, 3, 4
+            )
+            SELECT
+              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
+                 AND fitup_date ~ '{_ISO}'
+                 AND substr(fitup_date,1,10) BETWEEN :s AND :e)              AS fitup_di,
+              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
+                 AND welding_date ~ '{_ISO}'
+                 AND substr(welding_date,1,10) BETWEEN :s AND :e)            AS welding_di,
+              (SELECT count(*) FROM sp WHERE welded AND last_weld BETWEEN :s AND :e)   AS spools_done,
+              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
+                 AND site_delivery_date ~ '{_ISO}'
+                 AND substr(site_delivery_date,1,10) BETWEEN :s AND :e)      AS site_di,
+              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
+                 AND delivery_date ~ '{_ISO}'
+                 AND substr(delivery_date,1,10) BETWEEN :s AND :e)           AS paint_di,
+              (SELECT count(*) FROM spools WHERE shop_field='S' AND irn_date ~ '{_ISO}'
+                 AND substr(irn_date,1,10) BETWEEN :s AND :e)                AS irn_joints,
+              (SELECT coalesce(sum(total_fitters),0) FROM manpower_reports
+                 WHERE date BETWEEN :s AND :e)                               AS fitter_days,
+              (SELECT coalesce(sum(total_welders),0) FROM manpower_reports
+                 WHERE date BETWEEN :s AND :e)                               AS welder_days
+        """,
+        {"s": s, "e": e}, ttl=30,
+    ).iloc[0].astype(float)
+
+    st.subheader("Key figures")
+    a = st.columns(4)
+    a[0].metric("Fit-up (dia-inch)", f"{kf['fitup_di']:,.2f}", border=True)
+    a[1].metric("Welding (dia-inch)", f"{kf['welding_di']:,.2f}", border=True)
+    a[2].metric("Spools completed", f"{int(kf['spools_done']):,}", border=True)
+    a[3].metric("IRN'd (joints)", f"{int(kf['irn_joints']):,}", border=True)
+    b = st.columns(4)
+    b[0].metric("Delivered to painting (dia-inch)", f"{kf['paint_di']:,.2f}", border=True)
+    b[1].metric("Delivered to site (dia-inch)", f"{kf['site_di']:,.2f}", border=True)
+    b[2].metric("Fitter man-days", f"{int(kf['fitter_days']):,}", border=True)
+    b[3].metric("Welder man-days", f"{int(kf['welder_days']):,}", border=True)
+
+    st.subheader("Productivity")
+    p = st.columns(2)
+    p[0].metric("Dia-inch / fitter / day",
+               f"{kf['fitup_di']/kf['fitter_days']:.2f}" if kf["fitter_days"] else "—",
+               border=True)
+    p[1].metric("Dia-inch / welder / day",
+               f"{kf['welding_di']/kf['welder_days']:.2f}" if kf["welder_days"] else "—",
+               border=True)
+
+    # ---- plan vs actual for the week, using the Targets & plan settings ----
+    plan_row = None
+    if cfg.get("plan_start") and cfg.get("target_date"):
+        plan_start = pd.to_datetime(cfg["plan_start"]).date()
+        target_date = pd.to_datetime(cfg["target_date"]).date()
+        scope = cfg.get("scope", "issued")
+        _rr = cfg.get("rest")
+        rest_s = set(int(x) for x in _rr.split(",") if x) if _rr is not None else {6}
+        hol_s, _ = _parse_dates(cfg.get("holidays") or "")
+        scope_where = ("AND lower(coalesce(status,''))='issued' "
+                       "AND upper(trim(coalesce(workable,'')))='Y'") if scope == "issued" else ""
+        scope_di = float(db.query(
+            f"SELECT coalesce(sum(joint_size),0) v FROM spools WHERE shop_field='S' {scope_where}",
+            ttl=60,
+        ).iloc[0]["v"])
+        total_wd = _wdays(plan_start, target_date, rest_s, hol_s)
+        if total_wd > 0 and wk_start <= target_date and wk_end >= plan_start:
+            planned_per_day = scope_di / total_wd
+            week_wd = _wdays(max(wk_start, plan_start), min(wk_end, target_date), rest_s, hol_s)
+            planned_week_di = planned_per_day * week_wd
+            delta = kf["welding_di"] - planned_week_di
+            plan_row = pd.DataFrame([{
+                "Working days this week": week_wd,
+                "Planned (dia-inch)": round(planned_week_di, 2),
+                "Actual welding (dia-inch)": round(kf["welding_di"], 2),
+                "Delta": round(delta, 2),
+                "Status": "BEHIND" if delta < -0.01 else "on / ahead of plan",
+            }])
+    st.subheader("Plan vs actual")
+    if plan_row is not None:
+        st.dataframe(
+            plan_row.style.map(
+                lambda v: "color:#f87171;font-weight:bold" if v == "BEHIND" else "color:#34d399",
+                subset=["Status"],
+            ),
+            use_container_width=True, hide_index=True,
+        )
+    else:
+        st.info("No plan covers this week — set one on **Targets & plan**.")
+
+    # ---- daily breakdown --------------------------------------------------
+    st.subheader("Daily breakdown")
+    daily = db.query(
+        f"""SELECT d::date AS day,
+                   coalesce((SELECT sum(joint_size) FROM spools
+                             WHERE shop_field='S' AND substr(fitup_date,1,10)=d::date::text), 0)   AS fitup_di,
+                   coalesce((SELECT sum(joint_size) FROM spools
+                             WHERE shop_field='S' AND substr(welding_date,1,10)=d::date::text), 0) AS welding_di,
+                   coalesce((SELECT total_fitters FROM manpower_reports WHERE date=d::date::text), 0) AS fitters,
+                   coalesce((SELECT total_welders FROM manpower_reports WHERE date=d::date::text), 0) AS welders
+              FROM generate_series(CAST(:s AS date), CAST(:e AS date), interval '1 day') d
+             ORDER BY d""",
+        {"s": s, "e": e}, ttl=30,
+    )
+    daily["day"] = pd.to_datetime(daily["day"])
+    for c_ in ("fitup_di", "welding_di", "fitters", "welders"):
+        daily[c_] = daily[c_].astype(float)
+
+    melt = daily.melt(id_vars="day", value_vars=["fitup_di", "welding_di"],
+                      var_name="metric", value_name="di")
+    melt["metric"] = melt["metric"].map({"fitup_di": "Fit-up", "welding_di": "Welding"})
+    chart = alt.Chart(melt).mark_bar().encode(
+        x=alt.X("day:T", title=None, axis=alt.Axis(format="%a %d")),
+        y=alt.Y("di:Q", title="Dia-inch"),
+        xOffset="metric:N",
+        color=alt.Color("metric:N", title=None,
+                        scale=alt.Scale(domain=["Fit-up", "Welding"],
+                                        range=["#5ea0ff", "#22c55e"])),
+        tooltip=[alt.Tooltip("day:T", title="Day", format="%a %d %b"),
+                 "metric:N", alt.Tooltip("di:Q", format=",.2f")],
+    ).properties(height=260, title="Daily fit-up vs welding")
+    st.altair_chart(dark_alt(chart), use_container_width=True)
+
+    dv = daily.copy()
+    dv["Day"] = dv["day"].dt.strftime("%a %d %b")
+    dv = dv[["Day", "fitup_di", "welding_di", "fitters", "welders"]].rename(columns={
+        "fitup_di": "Fit-up (dia-inch)", "welding_di": "Welding (dia-inch)",
+        "fitters": "Fitters", "welders": "Welders",
+    })
+    show_table(dv, "weekly_daily")
+
+    # ---- by work order / batch / area -------------------------------------
+    def _week_group(dim: str, label_: str) -> pd.DataFrame:
+        g = db.query(
+            f"""SELECT {dim} AS grp,
+                       coalesce(sum(CASE WHEN fitup_date ~ '{_ISO}'
+                            AND substr(fitup_date,1,10) BETWEEN :s AND :e
+                            THEN joint_size END), 0) AS fitup_di,
+                       coalesce(sum(CASE WHEN welding_date ~ '{_ISO}'
+                            AND substr(welding_date,1,10) BETWEEN :s AND :e
+                            THEN joint_size END), 0) AS welding_di
+                  FROM spools WHERE shop_field='S' AND coalesce({dim},'')<>''
+                 GROUP BY {dim}
+                HAVING coalesce(sum(CASE WHEN fitup_date ~ '{_ISO}'
+                            AND substr(fitup_date,1,10) BETWEEN :s AND :e
+                            THEN joint_size END), 0) > 0
+                    OR coalesce(sum(CASE WHEN welding_date ~ '{_ISO}'
+                            AND substr(welding_date,1,10) BETWEEN :s AND :e
+                            THEN joint_size END), 0) > 0
+                 ORDER BY grp""",
+            {"s": s, "e": e}, ttl=30,
+        )
+        if g.empty:
+            return g
+        return g.rename(columns={"grp": label_, "fitup_di": "Fit-up (dia-inch)",
+                                 "welding_di": "Welding (dia-inch)"})
+
+    st.subheader("Activity this week — by group")
+    wo_df = _week_group("wo_no", "WO no")
+    batch_df = _week_group("batch_no", "Batch no")
+    area_df = _week_group("area", "Area")
+    t1, t2, t3 = st.tabs(["By work order", "By batch", "By area"])
+    for tab, df_g in ((t1, wo_df), (t2, batch_df), (t3, area_df)):
+        with tab:
+            if df_g.empty:
+                st.caption("No activity this week.")
+            else:
+                st.dataframe(df_g, use_container_width=True, hide_index=True,
+                            column_config=num2_cfg(df_g))
+
+    st.divider()
+    key_rows = [
+        ("Fit-up (dia-inch)", f"{kf['fitup_di']:,.2f}"),
+        ("Welding (dia-inch)", f"{kf['welding_di']:,.2f}"),
+        ("Spools completed", f"{int(kf['spools_done']):,}"),
+        ("IRN'd (joints)", f"{int(kf['irn_joints']):,}"),
+        ("Delivered to painting (dia-inch)", f"{kf['paint_di']:,.2f}"),
+        ("Delivered to site (dia-inch)", f"{kf['site_di']:,.2f}"),
+        ("Fitter man-days", f"{int(kf['fitter_days']):,}"),
+        ("Welder man-days", f"{int(kf['welder_days']):,}"),
+    ]
+    if plan_row is not None:
+        r0 = plan_row.iloc[0]
+        key_rows += [
+            ("Planned this week (dia-inch)", f"{r0['Planned (dia-inch)']:,.2f}"),
+            ("Actual welding vs plan (delta)", f"{r0['Delta']:,.2f}"),
+            ("Status", str(r0["Status"])),
+        ]
+    st.download_button(
+        "⬇ Weekly report (.xlsx)",
+        data=reports.build_weekly_report_xlsx(label, key_rows, dv, wo_df, batch_df, area_df),
+        file_name=f"weekly_report_{wk_start.isoformat()}_{reports.stamp()}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary",
+    )
 
 
 def page_wo_summary() -> None:
@@ -2897,6 +3126,7 @@ def page_manpower() -> None:
     "Overview": page_overview,
     "Targets & plan": page_targets,
     "Work order summary": page_wo_summary,
+    "Weekly report": page_weekly,
     "Update progress": page_update,
     "Scan & update": page_scan,
     "Field workers": page_field_workers,

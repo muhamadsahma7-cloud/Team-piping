@@ -276,6 +276,47 @@ def _write_report_sheet(wb, sheet: str, title: str, subtitle: str, dfr: pd.DataF
 
 
 # ----------------------------------------------------------------------
+# weekly report
+# ----------------------------------------------------------------------
+def build_weekly_report_xlsx(
+    label: str,
+    key_rows: list[tuple[str, str]],
+    daily: pd.DataFrame,
+    wo: pd.DataFrame,
+    batch: pd.DataFrame,
+    area: pd.DataFrame,
+) -> bytes:
+    """Weekly report workbook: Key figures + Daily + By work order/batch/area."""
+    from openpyxl import Workbook
+
+    gen = f"Generated {datetime.now(MYT):%Y-%m-%d %H:%M} MYT"
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    ws = wb.create_sheet("Key figures", 0)
+    ws.cell(1, 1, f"WEEKLY REPORT  —  {label}").font = Font(bold=True, size=14, color="1F4E79")
+    ws.cell(2, 1, gen).font = Font(italic=True, size=9, color="808080")
+    r = 4
+    for k, v in key_rows:
+        ws.cell(r, 1, k).font = Font(bold=True)
+        ws.cell(r, 2, v)
+        r += 1
+    ws.column_dimensions["A"].width = 34
+    ws.column_dimensions["B"].width = 22
+
+    idx = 1
+    for sheet, dfr in (("Daily", daily), ("By work order", wo),
+                       ("By batch", batch), ("By area", area)):
+        if dfr is not None and not dfr.empty:
+            _write_report_sheet(wb, sheet, f"{sheet.upper()}  —  {label}", gen, dfr, index=idx)
+            idx += 1
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# ----------------------------------------------------------------------
 # master export  (mirrors export_master.py)
 # ----------------------------------------------------------------------
 _RENAME = {
