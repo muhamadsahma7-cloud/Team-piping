@@ -1740,9 +1740,11 @@ def page_scan() -> None:
         return
 
     # A plain text box (not a combo/selectbox) so the phone keyboard always
-    # opens; matched against the roster as you type.
+    # opens; matched against the roster as you type. key= (not value=) is
+    # what makes Streamlit remember what was typed across reruns in this
+    # same browser tab - a fresh tab (a fresh scan) starts blank on purpose.
     _names = allw["name"].tolist()
-    q = st.text_input("Your name", value=st.session_state.get("scan_worker", ""),
+    q = st.text_input("Your name", key="scan_who_text",
                       placeholder="Type your name…").strip()
     who = None
     if q:
@@ -1760,7 +1762,6 @@ def page_scan() -> None:
         st.info("Type your name above to continue.")
         _scan_history(code)
         return
-    st.session_state["scan_worker"] = who        # pre-fill on the next spool
     wrow = allw.loc[allw["name"] == who].iloc[0]
     wtrade = str(wrow["trade"])
 
