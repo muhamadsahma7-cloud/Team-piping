@@ -104,6 +104,8 @@ create table if not exists public.spools (
     pwht                     text,
     fitup_date               text,
     welding_date             text,
+    fitup_by                 text,               -- fitter name (QR scan)
+    welding_by               text,               -- welder name (QR scan)
     delivery_order_no        text,
     delivery_date            text,
     site_do_no               text,
@@ -259,6 +261,8 @@ create index if not exists idx_qc_wcs_uploaded_at on public.qc_wcs_docs (uploade
 --                    blocks double entry at the database level (per joint)
 -- =====================================================================
 alter table public.spools add column if not exists qr_id text;
+alter table public.spools add column if not exists fitup_by text;    -- fitter name
+alter table public.spools add column if not exists welding_by text;  -- welder name
 drop index if exists public.uq_spools_qr_id;
 create index if not exists idx_spools_qr_id on public.spools (qr_id);
 

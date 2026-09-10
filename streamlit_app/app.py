@@ -1519,6 +1519,8 @@ def _ensure_qr_schema() -> bool:
     wasn't (re-)run. Runs once per server process. Safe to fail silently."""
     stmts = [
         "ALTER TABLE public.spools ADD COLUMN IF NOT EXISTS qr_id text",
+        "ALTER TABLE public.spools ADD COLUMN IF NOT EXISTS fitup_by text",
+        "ALTER TABLE public.spools ADD COLUMN IF NOT EXISTS welding_by text",
         "DROP INDEX IF EXISTS public.uq_spools_qr_id",          # was UNIQUE in v1
         "CREATE INDEX IF NOT EXISTS idx_spools_qr_id ON public.spools (qr_id)",
         """CREATE TABLE IF NOT EXISTS public.field_workers (
@@ -1644,7 +1646,9 @@ def page_scan() -> None:
                       coalesce(dwg_spool_no,'')   AS dwg_spool_no,
                       coalesce(material_group,'') AS material_group,
                       coalesce(fitup_date,'')     AS fitup_date,
-                      coalesce(welding_date,'')   AS welding_date
+                      coalesce(welding_date,'')   AS welding_date,
+                      coalesce(fitup_by,'')       AS fitup_by,
+                      coalesce(welding_by,'')     AS welding_by
                  FROM spools WHERE qr_id = :c
                 ORDER BY joint_no""",
             {"c": code}, ttl=0,
@@ -1689,9 +1693,10 @@ def page_scan() -> None:
     m1.metric("Fit-Up", f"{int((js['fitup_date'] != '').sum())}/{n}")
     m2.metric("Welding", f"{int((js['welding_date'] != '').sum())}/{n}")
 
-    view = js[["joint_no", "joint_size", "fitup_date", "welding_date"]].copy()
+    view = js[["joint_no", "joint_size", "fitup_date", "fitup_by",
+               "welding_date", "welding_by"]].copy()
     view["joint_size"] = pd.to_numeric(view["joint_size"], errors="coerce")
-    view.columns = ["Joint", "Size", "Fit-Up", "Welding"]
+    view.columns = ["Joint", "Size", "Fit-Up", "Fitter", "Welding", "Welder"]
     st.dataframe(view, use_container_width=True, hide_index=True)
 
     # Who is updating — the activity follows their trade:
@@ -1748,8 +1753,9 @@ def page_scan() -> None:
             return
 
         seq = " AND coalesce(fitup_date,'') <> '' " if activity == "Welding" else ""
+        by_col = "fitup_by" if activity == "Fit-Up" else "welding_by"
         one = (
-            f"WITH upd AS ( UPDATE spools SET {col} = :d "
+            f"WITH upd AS ( UPDATE spools SET {col} = :d, {by_col} = :wn "
             f"WHERE qr_id = :c AND joint_no = :j AND coalesce({col},'') = '' {seq} "
             "RETURNING id ) "
             "INSERT INTO field_updates (spool_id, qr_id, joint_no, activity, "
@@ -2612,6 +2618,7 @@ def page_admin() -> None:
     if st.session_state.get("permission") != "all":
         st.warning("Admin only (needs the 'all' permission).")
         return
+    _ensure_qr_schema()          # keep qr_id / fitup_by / welding_by in place
 
     eng = db.engine()
     from sqlalchemy import text as _t
@@ -2700,18 +2707,26 @@ def page_admin() -> None:
                 "SELECT 1 FROM information_schema.columns WHERE table_schema='public' "
                 "AND table_name='spools' AND column_name='qr_id'", ttl=0,
             ).empty
-            relinked = 0
+            relinked = names_kept = 0
             with eng.begin() as cx:
                 if auto_snap:
                     sname = _SNAP_PREFIX + pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
                     cx.execute(_t(f'CREATE TABLE public."{sname}" AS SELECT * FROM public.spools'))
                 _kk = ("iso_dwg_no", "line_no", "iso_run_no", "dwg_spool_no")
+                _jk = _kk + ("joint_no",)
                 if has_qr:
                     # carry printed spool QR codes over the re-import, by spool key
                     cx.execute(_t(
                         "CREATE TEMP TABLE _qr_keep ON COMMIT DROP AS "
                         f"SELECT DISTINCT {', '.join(_kk)}, qr_id "
                         "FROM public.spools WHERE coalesce(qr_id,'') <> ''"
+                    ))
+                    # and the fitter / welder names, by joint key
+                    cx.execute(_t(
+                        "CREATE TEMP TABLE _by_keep ON COMMIT DROP AS "
+                        f"SELECT DISTINCT {', '.join(_jk)}, fitup_by, welding_by "
+                        "FROM public.spools "
+                        "WHERE coalesce(fitup_by,'')<>'' OR coalesce(welding_by,'')<>''"
                     ))
                 cx.execute(_t("TRUNCATE public.spools RESTART IDENTITY"))
                 clean.to_sql("spools", cx, if_exists="append", index=False,
@@ -2723,6 +2738,13 @@ def page_admin() -> None:
                         "UPDATE public.spools s SET qr_id = k.qr_id "
                         f"FROM _qr_keep k WHERE s.qr_id IS NULL AND {_m}"
                     )).rowcount
+                    _mj = " AND ".join(
+                        f"coalesce(s.{c},'') = coalesce(k.{c},'')" for c in _jk)
+                    names_kept = cx.execute(_t(
+                        "UPDATE public.spools s "
+                        "SET fitup_by = k.fitup_by, welding_by = k.welding_by "
+                        f"FROM _by_keep k WHERE {_mj}"
+                    )).rowcount
             try:
                 db.execute("INSERT INTO user_log (username) VALUES (:u)",
                            {"u": f"{st.session_state['user']} [excel import {len(clean)} rows]"})
@@ -2731,7 +2753,8 @@ def page_admin() -> None:
             st.cache_data.clear()
             st.success(f"Imported {len(clean):,} rows into spools"
                        + (f"; snapshot `{sname}` kept." if auto_snap else ".")
-                       + (f" Re-linked {relinked:,} QR code(s)." if relinked else ""))
+                       + (f" Re-linked {relinked:,} QR code(s)." if relinked else "")
+                       + (f" Kept {names_kept:,} fitter/welder name(s)." if names_kept else ""))
 
 
 def page_manpower() -> None:
