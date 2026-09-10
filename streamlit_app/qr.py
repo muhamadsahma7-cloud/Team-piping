@@ -59,13 +59,14 @@ def _font(size: int):
         return ImageFont.load_default()
 
 
-LABEL_W_CM, LABEL_H_CM = 5.2, 8.5                     # sticker / border size
+LABEL_W_CM, LABEL_H_CM = 8.5, 5.2                     # landscape sticker / border
 
 
 def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> bytes:
     """Print-ready sheet of QR labels, one per spool.
 
-    Each bordered label is LABEL_W_CM x LABEL_H_CM; cut on the line.
+    Landscape label: description on the left, QR on the right. Each
+    bordered label is LABEL_W_CM x LABEL_H_CM; cut on the line.
 
     rows: dicts with keys  qr_id, wo, batch, iso, line, page, area,
                            spool, material, joints
@@ -77,19 +78,18 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
     DPI = 150
     PAGE_W, PAGE_H = 1240, 1754                       # A4 @ ~150 dpi
     MARGIN = 34
-    cell_w = round(LABEL_W_CM / 2.54 * DPI)           # 5.2 cm
-    cell_h = round(LABEL_H_CM / 2.54 * DPI)           # 8.5 cm
+    cell_w = round(LABEL_W_CM / 2.54 * DPI)           # 8.5 cm
+    cell_h = round(LABEL_H_CM / 2.54 * DPI)           # 5.2 cm
     cols = max(1, (PAGE_W - 2 * MARGIN) // cell_w)
     rows_per_page = max(1, (PAGE_H - 2 * MARGIN) // cell_h)
     per_page = cols * rows_per_page
-    f_val = _font(17)
-    f_lbl = _font(12)
-    f_spool = _font(18)                               # SPOOL: a touch bigger only
-    LINE_H = 18
-    PAD = 11
-    LBL_X = 74                                        # value column offset
+    f_val = _font(16)
+    f_lbl = _font(11)
+    f_spool = _font(18)
+    f_code = _font(12)
+    PAD = 12
 
-    def _clip(s: str, n: int = 27) -> str:
+    def _clip(s: str, n: int) -> str:
         return s if len(s) <= n else s[:n - 1] + "…"
 
     pages: list[Image.Image] = []
@@ -113,7 +113,7 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
         jn = r.get("joints")
         fields = [
             ("ISO", _v("iso")),
-            ("SPOOL", _v("spool") + (f"   ({jn} jt)" if jn else "")),
+            ("SPOOL", _v("spool") + (f"  ({jn} jt)" if jn else "")),
             ("LINE", _v("line")),
             ("PAGE", _v("page")),
             ("AREA", _v("area")),
@@ -122,20 +122,31 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
             ("MATERIAL", _v("material")),
         ]
 
+        # ---- QR on the right, vertically centred ----
+        q = min(cell_h - 2 * PAD, 240)
         qr = qrcode.make(scan_url(base_url, r["qr_id"], kiosk_token),
                          box_size=6, border=1).get_image().convert("RGB")
-        q = min(cell_w - 2 * PAD,
-                cell_h - (len(fields) + 1) * LINE_H - 2 * PAD - 12)
         qr = qr.resize((q, q))
-        page.paste(qr, (cx + (cell_w - q) // 2, cy + PAD))
-        ty = cy + PAD + q + 8
+        qx = cx + cell_w - PAD - q
+        page.paste(qr, (qx, cy + (cell_h - q) // 2))
+        draw.line([(qx - PAD, cy + 6), (qx - PAD, cy + cell_h - 6)],
+                  fill="#dddddd", width=1)
+
+        # ---- description on the left ----
+        x0 = cx + PAD
+        val_x = x0 + 60
+        val_w = qx - PAD - val_x
+        vchars = max(8, val_w // 8)
+        LINE_H = 24
+        block_h = LINE_H * (len(fields) + 1)
+        ty = cy + max(PAD, (cell_h - block_h) // 2)
         for k, (lbl, val) in enumerate(fields):
             yy = ty + k * LINE_H
-            draw.text((cx + PAD, yy + 2), lbl, fill="#777777", font=f_lbl)
-            draw.text((cx + LBL_X, yy), _clip(val),
-                      fill="black", font=(f_spool if lbl == "SPOOL" else f_val))
-        draw.text((cx + PAD, ty + len(fields) * LINE_H + 3), r["qr_id"],
-                  fill="#999999", font=f_lbl)
+            draw.text((x0, yy + 3), lbl, fill="#777777", font=f_lbl)
+            draw.text((val_x, yy), _clip(val, vchars), fill="black",
+                      font=(f_spool if lbl == "SPOOL" else f_val))
+        draw.text((x0, ty + len(fields) * LINE_H + 2), r["qr_id"],
+                  fill="#999999", font=f_code)
 
     if not pages:
         pages = [Image.new("RGB", (PAGE_W, PAGE_H), "white")]
