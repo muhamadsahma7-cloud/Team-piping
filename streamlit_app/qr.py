@@ -83,9 +83,9 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
     cols = max(1, (PAGE_W - 2 * MARGIN) // cell_w)
     rows_per_page = max(1, (PAGE_H - 2 * MARGIN) // cell_h)
     per_page = cols * rows_per_page
-    f_val = _font(16)
-    f_lbl = _font(11)
-    f_spool = _font(18)
+    f_val = _font(17)
+    f_lbl = _font(12)
+    f_spool = _font(19)
     f_code = _font(12)
     PAD = 12
 
@@ -123,7 +123,7 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
         ]
 
         # ---- QR on the right, vertically centred ----
-        q = min(cell_h - 2 * PAD, 240)
+        q = min(cell_h - 2 * PAD, 196)
         qr = qrcode.make(scan_url(base_url, r["qr_id"], kiosk_token),
                          box_size=6, border=1).get_image().convert("RGB")
         qr = qr.resize((q, q))
