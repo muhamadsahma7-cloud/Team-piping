@@ -97,21 +97,24 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
     import qrcode
     from PIL import Image, ImageDraw
 
-    DPI = 150
-    W = round(LABEL_W_CM / 2.54 * DPI)                # 8.0 cm
-    H = round(LABEL_H_CM / 2.54 * DPI)                # 5.2 cm
+    DPI = 300                                         # high-res raster -> sharp
+    S = DPI / 150                                     # design units are @150
+    px = lambda v: round(v * S)
+    W = round(LABEL_W_CM / 2.54 * DPI)
+    H = round(LABEL_H_CM / 2.54 * DPI)
 
-    f_lbl = _font(13)
-    f_val = _font(16)
-    f_val_sm = _font(13)
-    f_wo = _font(13)
-    f_code = _font(10)
-    f_titles = [_font(s) for s in (28, 25, 22, 19, 16, 14)]
+    f_lbl = _font(px(13))
+    f_val = _font(px(16))
+    f_val_sm = _font(px(13))
+    f_wo = _font(px(13))
+    f_code = _font(px(10))
+    f_titles = [_font(px(s)) for s in (28, 25, 22, 19, 16, 14)]
 
-    STRIP = 22                                        # vertical WO column
-    TITLE_H = 44
-    LBL_W = 100                                       # label column width
-    GAP = 8
+    STRIP = px(22)                                    # vertical WO column
+    TITLE_H = px(44)
+    LBL_W = px(100)                                   # label column width
+    GAP = px(8)
+    BW, HW = px(2), max(1, px(1))                     # heavy / hair line widths
 
     def _clip(s: str, n: int) -> str:
         return s if len(s) <= n else s[:n - 1] + "…"
@@ -125,43 +128,45 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
         pages.append(page)
         d = ImageDraw.Draw(page)
 
-        d.rectangle([0, 0, W - 1, H - 1], outline="black", width=2)
+        d.rectangle([0, 0, W - 1, H - 1], outline="black", width=BW)
 
         # ---- vertical WO strip, left edge (WO number only) ----
         wo = _v("wo")
         wo_txt = "WO-" + wo if wo != "-" else "WO -"
-        st_img = Image.new("RGB", (H - 12, STRIP - 2), "white")
-        _bold(ImageDraw.Draw(st_img), (2, 0), wo_txt, f_wo)
-        page.paste(st_img.rotate(90, expand=True), (2, 6))
-        d.line([(STRIP, 2), (STRIP, H - 2)], fill="black", width=1)
+        st_img = Image.new("RGB", (H - px(12), STRIP - px(2)), "white")
+        _bold(ImageDraw.Draw(st_img), (px(2), 0), wo_txt, f_wo, sw=px(1))
+        page.paste(st_img.rotate(90, expand=True), (px(2), px(6)))
+        d.line([(STRIP, BW), (STRIP, H - BW)], fill="black", width=HW)
 
         x0 = STRIP
         inner_w = W - x0
 
         # ---- title bar (ISO drawing no) ----
-        d.rectangle([x0, 2, W - 3, 2 + TITLE_H], outline="black", width=2)
+        d.rectangle([x0, BW, W - BW, BW + TITLE_H], outline="black", width=BW)
         title = _v("iso")
         tf = next((f for f in f_titles
-                   if d.textlength(title, font=f) <= inner_w - 18), f_titles[-1])
+                   if d.textlength(title, font=f) <= inner_w - px(18)), f_titles[-1])
         _bold(d, (x0 + (inner_w - d.textlength(title, font=tf)) / 2,
-                  2 + (TITLE_H - _text_h(d, title, tf)) / 2 - 2),
-              title, tf)
+                  BW + (TITLE_H - _text_h(d, title, tf)) / 2 - px(2)),
+              title, tf, sw=px(1))
 
-        body_y0 = 2 + TITLE_H
+        body_y0 = BW + TITLE_H
         # ---- QR box, right ----
         qx0 = x0 + int(inner_w * 0.52)
-        d.rectangle([qx0, body_y0, W - 3, H - 3], outline="black", width=2)
-        code_h = _text_h(d, "A0", f_code) + 6
-        q = min(W - 3 - qx0 - 14, H - 3 - body_y0 - code_h - 12)
-        qimg = (qrcode.make(scan_url(base_url, r["qr_id"], kiosk_token),
-                            box_size=6, border=1)
-                .get_image().convert("RGB").resize((q, q)))
-        avail_h = H - 3 - body_y0 - code_h
-        page.paste(qimg, (qx0 + (W - 3 - qx0 - q) // 2,
-                          body_y0 + max(6, (avail_h - q) // 2)))
-        d.text((qx0 + (W - 3 - qx0 - d.textlength(str(r.get("qr_id", "")), font=f_code)) / 2,
-                H - 3 - code_h + 2), str(r.get("qr_id", "")),
-               fill="#666666", font=f_code)
+        d.rectangle([qx0, body_y0, W - BW, H - BW], outline="black", width=BW)
+        code_h = _text_h(d, "A0", f_code) + px(6)
+        box_w, box_h = W - BW - qx0, H - BW - body_y0
+        q = min(box_w - px(14), box_h - code_h - px(12))
+        raw = (qrcode.make(scan_url(base_url, r["qr_id"], kiosk_token), border=2)
+               .get_image().convert("L"))
+        scale = max(1, q // raw.width)                # crisp integer upscale
+        qimg = raw.resize((raw.width * scale, raw.width * scale), Image.NEAREST)
+        qw = qimg.width
+        page.paste(qimg, (qx0 + (box_w - qw) // 2,
+                          body_y0 + max(px(6), (box_h - code_h - qw) // 2)))
+        code = str(r.get("qr_id", ""))
+        _bold(d, (qx0 + (box_w - d.textlength(code, font=f_code)) / 2,
+                  H - BW - code_h + px(2)), code, f_code, fill="#555555", sw=1)
 
         # ---- field table, left ----
         fields = [
@@ -173,20 +178,20 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
             ("Batch No.", _v("batch")),
             ("Paint Code", _v("paint")),
         ]
-        d.rectangle([x0, body_y0, qx0, H - 3], outline="black", width=2)
-        d.line([(x0 + LBL_W, body_y0), (x0 + LBL_W, H - 3)],
-               fill="black", width=1)
-        rh = (H - 3 - body_y0) / len(fields)
-        val_chars = max(6, (qx0 - x0 - LBL_W - GAP - 4) // 8)
+        d.rectangle([x0, body_y0, qx0, H - BW], outline="black", width=BW)
+        d.line([(x0 + LBL_W, body_y0), (x0 + LBL_W, H - BW)],
+               fill="black", width=HW)
+        rh = (H - BW - body_y0) / len(fields)
+        val_chars = max(6, int((qx0 - x0 - LBL_W - GAP - px(4)) / px(8)))
         for k, (lbl, val) in enumerate(fields):
             yy = body_y0 + k * rh
             if k:
-                d.line([(x0, yy), (qx0, yy)], fill="black", width=1)
-            _bold(d, (x0 + 6, yy + (rh - _text_h(d, lbl, f_lbl)) / 2 - 1),
-                  lbl, f_lbl)
+                d.line([(x0, yy), (qx0, yy)], fill="black", width=HW)
+            _bold(d, (x0 + px(6), yy + (rh - _text_h(d, lbl, f_lbl)) / 2 - px(1)),
+                  lbl, f_lbl, sw=max(1, px(1) - 1))
             vf = f_val if len(val) <= val_chars else f_val_sm
-            _bold(d, (x0 + LBL_W + GAP, yy + (rh - _text_h(d, val, vf)) / 2 - 1),
-                  _clip(val, val_chars + 4), vf)
+            _bold(d, (x0 + LBL_W + GAP, yy + (rh - _text_h(d, val, vf)) / 2 - px(1)),
+                  _clip(val, val_chars + 4), vf, sw=px(1))
 
     if not pages:
         pages = [Image.new("RGB", (W, H), "white")]
