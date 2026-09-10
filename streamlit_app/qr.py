@@ -59,29 +59,37 @@ def _font(size: int):
         return ImageFont.load_default()
 
 
-def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "",
-               cols: int = 3, rows_per_page: int = 5) -> bytes:
+LABEL_W_CM, LABEL_H_CM = 5.2, 8.5                     # sticker / border size
+
+
+def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> bytes:
     """Print-ready sheet of QR labels, one per spool.
 
-    rows: dicts with keys  qr_id, wo, batch, iso, line, page, spool,
-                           material, joints
+    Each bordered label is LABEL_W_CM x LABEL_H_CM; cut on the line.
+
+    rows: dicts with keys  qr_id, wo, batch, iso, line, page, area,
+                           spool, material, joints
     Returns a multi-page PDF (A4 portrait, ~150 dpi).
     """
     import qrcode
     from PIL import Image, ImageDraw
 
+    DPI = 150
     PAGE_W, PAGE_H = 1240, 1754                       # A4 @ ~150 dpi
-    MARGIN = 40
-    cell_w = (PAGE_W - 2 * MARGIN) // cols
-    cell_h = (PAGE_H - 2 * MARGIN) // rows_per_page
+    MARGIN = 34
+    cell_w = round(LABEL_W_CM / 2.54 * DPI)           # 5.2 cm
+    cell_h = round(LABEL_H_CM / 2.54 * DPI)           # 8.5 cm
+    cols = max(1, (PAGE_W - 2 * MARGIN) // cell_w)
+    rows_per_page = max(1, (PAGE_H - 2 * MARGIN) // cell_h)
     per_page = cols * rows_per_page
     f_val = _font(17)
     f_lbl = _font(12)
-    f_spool = _font(20)
-    LINE_H = 17
-    LBL_X = 78                                        # value column offset
+    f_spool = _font(18)                               # SPOOL: a touch bigger only
+    LINE_H = 18
+    PAD = 11
+    LBL_X = 74                                        # value column offset
 
-    def _clip(s: str, n: int = 30) -> str:
+    def _clip(s: str, n: int = 27) -> str:
         return s if len(s) <= n else s[:n - 1] + "…"
 
     pages: list[Image.Image] = []
@@ -95,8 +103,9 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "",
         cx = MARGIN + (slot % cols) * cell_w
         cy = MARGIN + (slot // cols) * cell_h
 
-        draw.rectangle([cx + 4, cy + 4, cx + cell_w - 4, cy + cell_h - 4],
-                       outline="#cccccc", width=1)
+        # border exactly on the cut line
+        draw.rectangle([cx, cy, cx + cell_w - 1, cy + cell_h - 1],
+                       outline="#999999", width=1)
 
         def _v(key: str) -> str:
             return str(r.get(key) or "").strip() or "—"
@@ -115,21 +124,25 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "",
 
         qr = qrcode.make(scan_url(base_url, r["qr_id"], kiosk_token),
                          box_size=6, border=1).get_image().convert("RGB")
-        q = min(cell_w - 30, cell_h - (len(fields) + 1) * LINE_H - 34)
+        q = min(cell_w - 2 * PAD,
+                cell_h - (len(fields) + 1) * LINE_H - 2 * PAD - 12)
         qr = qr.resize((q, q))
-        page.paste(qr, (cx + (cell_w - q) // 2, cy + 10))
-        ty = cy + 10 + q + 8
+        page.paste(qr, (cx + (cell_w - q) // 2, cy + PAD))
+        ty = cy + PAD + q + 8
         for k, (lbl, val) in enumerate(fields):
             yy = ty + k * LINE_H
-            draw.text((cx + 12, yy + 2), lbl, fill="#777777", font=f_lbl)
-            draw.text((cx + LBL_X, yy), _clip(val, 30),
+            draw.text((cx + PAD, yy + 2), lbl, fill="#777777", font=f_lbl)
+            draw.text((cx + LBL_X, yy), _clip(val),
                       fill="black", font=(f_spool if lbl == "SPOOL" else f_val))
-        draw.text((cx + 12, ty + len(fields) * LINE_H + 3), r["qr_id"],
+        draw.text((cx + PAD, ty + len(fields) * LINE_H + 3), r["qr_id"],
                   fill="#999999", font=f_lbl)
 
     if not pages:
         pages = [Image.new("RGB", (PAGE_W, PAGE_H), "white")]
 
     buf = io.BytesIO()
-    pages[0].save(buf, format="PDF", save_all=True, append_images=pages[1:])
+    # resolution=DPI so the page prints as true A4 and the border comes
+    # out at the real 5.2 x 8.5 cm (print at 100% / "actual size")
+    pages[0].save(buf, format="PDF", resolution=DPI, save_all=True,
+                  append_images=pages[1:])
     return buf.getvalue()
