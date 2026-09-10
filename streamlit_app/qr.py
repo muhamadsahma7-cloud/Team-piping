@@ -63,26 +63,19 @@ LABEL_W_CM, LABEL_H_CM = 8.5, 5.2                     # landscape sticker / bord
 
 
 def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> bytes:
-    """Print-ready sheet of QR labels, one per spool.
-
-    Landscape label: description on the left, QR on the right. Each
-    bordered label is LABEL_W_CM x LABEL_H_CM; cut on the line.
+    """One QR sticker per PDF page, sized LABEL_W_CM x LABEL_H_CM
+    (landscape: description on the left, QR on the right) - for a
+    label / sticker printer. Print at 100% / actual size.
 
     rows: dicts with keys  qr_id, wo, batch, iso, line, page, area,
                            spool, material, joints
-    Returns a multi-page PDF (A4 portrait, ~150 dpi).
     """
     import qrcode
     from PIL import Image, ImageDraw
 
     DPI = 150
-    PAGE_W, PAGE_H = 1240, 1754                       # A4 @ ~150 dpi
-    MARGIN = 34
     cell_w = round(LABEL_W_CM / 2.54 * DPI)           # 8.5 cm
     cell_h = round(LABEL_H_CM / 2.54 * DPI)           # 5.2 cm
-    cols = max(1, (PAGE_W - 2 * MARGIN) // cell_w)
-    rows_per_page = max(1, (PAGE_H - 2 * MARGIN) // cell_h)
-    per_page = cols * rows_per_page
     f_val = _font(17)
     f_lbl = _font(12)
     f_spool = _font(19)
@@ -93,17 +86,13 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
         return s if len(s) <= n else s[:n - 1] + "…"
 
     pages: list[Image.Image] = []
-    page = None
-    for i, r in enumerate(rows):
-        if i % per_page == 0:
-            page = Image.new("RGB", (PAGE_W, PAGE_H), "white")
-            pages.append(page)
+    for r in rows:
+        page = Image.new("RGB", (cell_w, cell_h), "white")
+        pages.append(page)
         draw = ImageDraw.Draw(page)
-        slot = i % per_page
-        cx = MARGIN + (slot % cols) * cell_w
-        cy = MARGIN + (slot // cols) * cell_h
+        cx = cy = 0
 
-        # border exactly on the cut line
+        # border just inside the page edge
         draw.rectangle([cx, cy, cx + cell_w - 1, cy + cell_h - 1],
                        outline="#999999", width=1)
 
@@ -149,7 +138,7 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
                   fill="#999999", font=f_code)
 
     if not pages:
-        pages = [Image.new("RGB", (PAGE_W, PAGE_H), "white")]
+        pages = [Image.new("RGB", (cell_w, cell_h), "white")]
 
     buf = io.BytesIO()
     # resolution=DPI so the page prints as true A4 and the border comes

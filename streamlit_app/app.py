@@ -2066,16 +2066,17 @@ def page_qr_labels() -> None:
              ORDER BY 4, 7""",
         params, ttl=0,
     )
-    st.write(f"{len(rows)} label(s) ready.")
+    st.write(f"{len(rows)} label(s) ready — PDF is one sticker per page "
+             f"({qr.LABEL_W_CM} × {qr.LABEL_H_CM} cm). Print at 100% / actual size.")
 
-    if not rows.empty and st.button("Build PDF sheet", type="primary"):
+    if not rows.empty and st.button("Build label PDF", type="primary"):
         if not base:
             st.warning("Set the App URL first — without it the QR codes open nothing.")
         else:
             try:
                 pdf = qr.labels_pdf(rows.to_dict("records"), base,
                                     kiosk_token=kiosk_token)
-                st.download_button("⬇ Download QR sheet (PDF)", pdf,
+                st.download_button("⬇ Download labels (PDF)", pdf,
                                    file_name=f"qr_labels_{reports.stamp()}.pdf",
                                    mime="application/pdf", type="primary")
             except ModuleNotFoundError:
