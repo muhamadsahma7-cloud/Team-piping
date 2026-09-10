@@ -60,7 +60,7 @@ def _font(size: int):
 
 
 def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "",
-               cols: int = 3, rows_per_page: int = 7) -> bytes:
+               cols: int = 3, rows_per_page: int = 5) -> bytes:
     """Print-ready sheet of QR labels, one per spool.
 
     rows: dicts with keys  qr_id, wo, batch, iso, line, page, spool,
@@ -75,11 +75,14 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "",
     cell_w = (PAGE_W - 2 * MARGIN) // cols
     cell_h = (PAGE_H - 2 * MARGIN) // rows_per_page
     per_page = cols * rows_per_page
-    f_big = _font(20)
-    f_small = _font(16)
+    f_val = _font(17)
+    f_lbl = _font(12)
+    f_spool = _font(20)
+    LINE_H = 18
+    LBL_X = 78                                        # value column offset
 
-    def _clip(s: str) -> str:
-        return s if len(s) <= 44 else s[:43] + "…"
+    def _clip(s: str, n: int = 30) -> str:
+        return s if len(s) <= n else s[:n - 1] + "…"
 
     pages: list[Image.Image] = []
     page = None
@@ -97,24 +100,31 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "",
 
         qr = qrcode.make(scan_url(base_url, r["qr_id"], kiosk_token),
                          box_size=6, border=1).get_image().convert("RGB")
-        q = min(cell_w - 24, cell_h - 150)
+        q = min(cell_w - 30, cell_h - 8 * LINE_H - 30)
         qr = qr.resize((q, q))
         page.paste(qr, (cx + (cell_w - q) // 2, cy + 10))
 
-        ty = cy + 10 + q + 4
+        def _v(key: str) -> str:
+            return str(r.get(key) or "").strip() or "—"
+
         jn = r.get("joints")
-        caption = [
-            (f"Spool {r.get('spool', '')}"
-             + (f"   ({jn} joints)" if jn else ""), f_big, "black"),
-            (f"WO {r.get('wo', '') or '—'}   ·   Batch {r.get('batch', '') or '—'}",
-             f_small, "black"),
-            (f"{r.get('iso', '')}  {r.get('line', '')}".strip(), f_small, "black"),
-            (f"Pg {r.get('page', '') or '—'}   ·   {r.get('material', '') or '—'}",
-             f_small, "black"),
-            (r["qr_id"], f_small, "#666666"),
+        fields = [
+            ("ISO", _v("iso")),
+            ("SPOOL", _v("spool") + (f"   ({jn} jt)" if jn else "")),
+            ("LINE", _v("line")),
+            ("PAGE", _v("page")),
+            ("BATCH", _v("batch")),
+            ("WO", _v("wo")),
+            ("MATERIAL", _v("material")),
         ]
-        for k, (txt, fnt, colr) in enumerate(caption):
-            draw.text((cx + 12, ty + k * 21), _clip(txt), fill=colr, font=fnt)
+        ty = cy + 10 + q + 8
+        for k, (lbl, val) in enumerate(fields):
+            yy = ty + k * LINE_H
+            draw.text((cx + 12, yy + 2), lbl, fill="#777777", font=f_lbl)
+            draw.text((cx + LBL_X, yy), _clip(val, 30),
+                      fill="black", font=(f_spool if lbl == "SPOOL" else f_val))
+        draw.text((cx + 12, ty + len(fields) * LINE_H + 3), r["qr_id"],
+                  fill="#999999", font=f_lbl)
 
     if not pages:
         pages = [Image.new("RGB", (PAGE_W, PAGE_H), "white")]
