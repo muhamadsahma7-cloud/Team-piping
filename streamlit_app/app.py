@@ -1871,7 +1871,7 @@ def page_field_workers() -> None:
     df = db.query(
         """SELECT id, name, trade,
                   coalesce(stamp_no,'') AS stamp_no,
-                  coalesce(phone,'')    AS phone, active,
+                  coalesce(phone,'')    AS phone, pin, active,
                   to_char(registered_at AT TIME ZONE 'Asia/Kuala_Lumpur',
                           'YYYY-MM-DD') AS since
              FROM field_workers ORDER BY active DESC, name""",
@@ -1880,7 +1880,11 @@ def page_field_workers() -> None:
     if df.empty:
         st.info("Nobody registered yet.")
         return
-    st.dataframe(df.drop(columns=["id"]), use_container_width=True, hide_index=True)
+    show_pin = is_admin and st.checkbox("Show PINs", value=False)
+    disp = df.drop(columns=["id"])
+    if not show_pin:
+        disp = disp.assign(pin="••••")
+    st.dataframe(disp, use_container_width=True, hide_index=True)
 
     if is_admin:
         st.markdown("**Admin**")
