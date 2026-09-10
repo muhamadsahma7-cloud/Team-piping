@@ -69,9 +69,8 @@ def _text_h(draw, text, font) -> int:
     return b[3] - b[1]
 
 
-def _bold(draw, xy, text, font, fill="black", sw: int = 1) -> None:
-    """Pseudo-bold: the default PIL font has no bold face, so thicken it."""
-    draw.text(xy, text, font=font, fill=fill, stroke_width=sw, stroke_fill=fill)
+def _txt(draw, xy, text, font, fill="black") -> None:
+    draw.text(xy, text, font=font, fill=fill)
 
 
 def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> bytes:
@@ -134,7 +133,7 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
         wo = _v("wo")
         wo_txt = "WO-" + wo if wo != "-" else "WO -"
         st_img = Image.new("RGB", (H - px(12), STRIP - px(2)), "white")
-        _bold(ImageDraw.Draw(st_img), (px(2), 0), wo_txt, f_wo, sw=px(1))
+        _txt(ImageDraw.Draw(st_img), (px(2), 0), wo_txt, f_wo)
         page.paste(st_img.rotate(90, expand=True), (px(2), px(6)))
         d.line([(STRIP, BW), (STRIP, H - BW)], fill="black", width=HW)
 
@@ -146,9 +145,9 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
         title = _v("iso")
         tf = next((f for f in f_titles
                    if d.textlength(title, font=f) <= inner_w - px(18)), f_titles[-1])
-        _bold(d, (x0 + (inner_w - d.textlength(title, font=tf)) / 2,
-                  BW + (TITLE_H - _text_h(d, title, tf)) / 2 - px(2)),
-              title, tf, sw=px(1))
+        _txt(d, (x0 + (inner_w - d.textlength(title, font=tf)) / 2,
+                 BW + (TITLE_H - _text_h(d, title, tf)) / 2 - px(2)),
+             title, tf)
 
         body_y0 = BW + TITLE_H
         # ---- QR box, right ----
@@ -165,8 +164,8 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
         page.paste(qimg, (qx0 + (box_w - qw) // 2,
                           body_y0 + max(px(6), (box_h - code_h - qw) // 2)))
         code = str(r.get("qr_id", ""))
-        _bold(d, (qx0 + (box_w - d.textlength(code, font=f_code)) / 2,
-                  H - BW - code_h + px(2)), code, f_code, fill="#555555", sw=1)
+        _txt(d, (qx0 + (box_w - d.textlength(code, font=f_code)) / 2,
+                  H - BW - code_h + px(2)), code, f_code, fill="#555555")
 
         # ---- field table, left ----
         fields = [
@@ -187,11 +186,11 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
             yy = body_y0 + k * rh
             if k:
                 d.line([(x0, yy), (qx0, yy)], fill="black", width=HW)
-            _bold(d, (x0 + px(6), yy + (rh - _text_h(d, lbl, f_lbl)) / 2 - px(1)),
-                  lbl, f_lbl, sw=max(1, px(1) - 1))
+            _txt(d, (x0 + px(6), yy + (rh - _text_h(d, lbl, f_lbl)) / 2 - px(1)),
+                 lbl, f_lbl)
             vf = f_val if len(val) <= val_chars else f_val_sm
-            _bold(d, (x0 + LBL_W + GAP, yy + (rh - _text_h(d, val, vf)) / 2 - px(1)),
-                  _clip(val, val_chars + 4), vf, sw=px(1))
+            _txt(d, (x0 + LBL_W + GAP, yy + (rh - _text_h(d, val, vf)) / 2 - px(1)),
+                 _clip(val, val_chars + 4), vf)
 
     if not pages:
         pages = [Image.new("RGB", (W, H), "white")]
