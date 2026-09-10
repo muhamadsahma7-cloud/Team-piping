@@ -1570,7 +1570,8 @@ def _register_worker_form(*, key: str, fixed_trade: str | None = None) -> None:
         trade = (fixed_trade if fixed_trade
                  else c[1].selectbox("Trade", ["Fitter", "Welder", "Both"]))
         c2 = st.columns(2)
-        stamp = c2[0].text_input("Welder No.")
+        stamp = c2[0].text_input("Welder No." if fixed_trade == "Fitter"
+                                  else "Welder No. (required for welders)")
         phone = c2[1].text_input("Phone (optional)")
         c3 = st.columns(2)
         pin1 = c3[0].text_input("Choose a PIN (4-6 digits)", type="password", max_chars=6)
@@ -1583,8 +1584,8 @@ def _register_worker_form(*, key: str, fixed_trade: str | None = None) -> None:
     p1, p2 = (pin1 or "").strip(), (pin2 or "").strip()
     if not nm:
         st.warning("Enter a name.")
-    elif not sn:
-        st.warning("Welder No. is required.")
+    elif trade in ("Welder", "Both") and not sn:
+        st.warning("Welder No. is required for welders.")
     elif not (p1.isdigit() and 4 <= len(p1) <= 6):
         st.warning("PIN must be 4 to 6 digits.")
     elif p1 != p2:
