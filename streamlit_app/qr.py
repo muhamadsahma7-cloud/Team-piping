@@ -167,6 +167,7 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
             ("Service", _v("service")),
             ("Pipe size", _v("size")),
             ("Run / Iso No", _v("page")),
+            ("Batch No.", _v("batch")),
             ("Paint Code", _v("paint")),
         ]
         d.rectangle([x0, body_y0, qx0, H - 3], outline="black", width=2)
