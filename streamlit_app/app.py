@@ -1570,7 +1570,7 @@ def _register_worker_form(*, key: str, fixed_trade: str | None = None) -> None:
         trade = (fixed_trade if fixed_trade
                  else c[1].selectbox("Trade", ["Fitter", "Welder", "Both"]))
         c2 = st.columns(2)
-        stamp = c2[0].text_input("Stamp / stencil no (optional)")
+        stamp = c2[0].text_input("Welder No.")
         phone = c2[1].text_input("Phone (optional)")
         c3 = st.columns(2)
         pin1 = c3[0].text_input("Choose a PIN (4-6 digits)", type="password", max_chars=6)
@@ -1579,9 +1579,12 @@ def _register_worker_form(*, key: str, fixed_trade: str | None = None) -> None:
     if not go:
         return
     nm = (name or "").strip()
+    sn = (stamp or "").strip()
     p1, p2 = (pin1 or "").strip(), (pin2 or "").strip()
     if not nm:
         st.warning("Enter a name.")
+    elif not sn:
+        st.warning("Welder No. is required.")
     elif not (p1.isdigit() and 4 <= len(p1) <= 6):
         st.warning("PIN must be 4 to 6 digits.")
     elif p1 != p2:
@@ -1591,7 +1594,7 @@ def _register_worker_form(*, key: str, fixed_trade: str | None = None) -> None:
             db.execute(
                 """INSERT INTO field_workers (name, trade, stamp_no, phone, pin)
                    VALUES (:n, :t, :s, :ph, :pin)""",
-                {"n": nm, "t": trade, "s": stamp.strip() or None,
+                {"n": nm, "t": trade, "s": sn,
                  "ph": phone.strip() or None, "pin": p1},
             )
             st.cache_data.clear()
@@ -1610,7 +1613,7 @@ def _scan_history(code: str) -> None:
                   coalesce(joint_no,'')    AS joint,
                   work_date,
                   coalesce(worker_name,'') AS worker,
-                  coalesce(stamp_no,'')    AS stamp,
+                  coalesce(stamp_no,'')    AS "Welder No.",
                   to_char(recorded_at AT TIME ZONE 'Asia/Kuala_Lumpur',
                           'YYYY-MM-DD HH24:MI') AS recorded
              FROM field_updates WHERE qr_id = :c
@@ -1870,7 +1873,7 @@ def page_field_workers() -> None:
     st.subheader("Registered")
     df = db.query(
         """SELECT id, name, trade,
-                  coalesce(stamp_no,'') AS stamp_no,
+                  coalesce(stamp_no,'') AS "Welder No.",
                   coalesce(phone,'')    AS phone, pin, active,
                   to_char(registered_at AT TIME ZONE 'Asia/Kuala_Lumpur',
                           'YYYY-MM-DD') AS since
