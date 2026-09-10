@@ -1712,7 +1712,18 @@ def page_scan() -> None:
                    "appears here.")
         return
 
-    who = st.selectbox("Your name", allw["name"].tolist())
+    _names = allw["name"].tolist()
+    _prev = st.session_state.get("scan_worker")
+    who = st.selectbox(
+        "Your name (type to search)", _names,
+        index=(_names.index(_prev) if _prev in _names else None),
+        placeholder="Type your name…",
+    )
+    if not who:
+        st.info("Pick your name to continue.")
+        _scan_history(code)
+        return
+    st.session_state["scan_worker"] = who        # pre-fill on the next spool
     wrow = allw.loc[allw["name"] == who].iloc[0]
     wtrade = str(wrow["trade"])
 
