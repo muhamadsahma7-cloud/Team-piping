@@ -1645,6 +1645,7 @@ def page_scan() -> None:
                       coalesce(iso_run_no,'')     AS iso_run_no,
                       coalesce(dwg_spool_no,'')   AS dwg_spool_no,
                       coalesce(area,'')           AS area,
+                      coalesce(service,'')        AS service,
                       coalesce(material_group,'') AS material_group,
                       coalesce(paint_system,'')   AS paint_system,
                       coalesce(fitup_date,'')     AS fitup_date,
@@ -1682,16 +1683,21 @@ def page_scan() -> None:
         return
 
     uniq = lambda col: ", ".join(sorted({x for x in js[col] if x})) or "—"
+    _psize = ", ".join(sorted(
+        {f"{float(x):g}" for x in js["joint_size"] if pd.notna(x)},
+        key=lambda s: float(s))) or "—"
     _info = [
         ("ISO", uniq("iso_dwg_no")),
-        ("SPOOL", uniq("dwg_spool_no")),
-        ("LINE", uniq("line_no")),
-        ("PAGE", uniq("iso_run_no")),
+        ("SPOOL NO.", uniq("dwg_spool_no")),
         ("AREA", uniq("area")),
-        ("BATCH", uniq("batch_no")),
+        ("SERVICE", uniq("service")),
+        ("PIPE SIZE", _psize),
+        ("RUN / ISO NO", uniq("iso_run_no")),
+        ("PAINT CODE", uniq("paint_system")),
         ("WO", uniq("wo_no")),
+        ("LINE", uniq("line_no")),
+        ("BATCH", uniq("batch_no")),
         ("MATERIAL", uniq("material_group")),
-        ("PAINT", uniq("paint_system")),
     ]
     _rows = "".join(
         "<tr>"
@@ -2060,8 +2066,10 @@ def page_qr_labels() -> None:
                    string_agg(DISTINCT nullif(iso_run_no,''), ', ')     AS page,
                    string_agg(DISTINCT nullif(dwg_spool_no,''), ', ')   AS spool,
                    string_agg(DISTINCT nullif(area,''), ', ')           AS area,
+                   string_agg(DISTINCT nullif(service,''), ', ')        AS service,
                    string_agg(DISTINCT nullif(material_group,''), ', ') AS material,
                    string_agg(DISTINCT nullif(paint_system,''), ', ')   AS paint,
+                   to_char(max(joint_size), 'FM999990.###')             AS size,
                    count(*)                                              AS joints
               FROM spools
              WHERE shop_field='S' AND coalesce(qr_id,'')<>'' {filt}

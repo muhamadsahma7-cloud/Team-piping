@@ -61,89 +61,136 @@ def _font(size: int):
 
 LABEL_W_CM, LABEL_H_CM = 8.5, 5.2                     # landscape sticker / border
 
+_last_pages: list = []                                # last render, for previews
+
+
+def _text_h(draw, text, font) -> int:
+    b = draw.textbbox((0, 0), text or "X", font=font)
+    return b[3] - b[1]
+
 
 def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> bytes:
-    """One QR sticker per PDF page, sized LABEL_W_CM x LABEL_H_CM
-    (landscape: description on the left, QR on the right) - for a
+    """One QR sticker per PDF page, LABEL_W_CM x LABEL_H_CM landscape, for a
     label / sticker printer. Print at 100% / actual size.
 
-    rows: dicts with keys  qr_id, wo, batch, iso, line, page, area,
-                           spool, material, joints
+    Layout (matches the shop's paper form):
+        +--------------------------------------------------+
+        | <ISO drawing no>  (title bar)                    |
+        +---------------------+----------------------------+
+      W | Spool No. | value   |                            |
+      O | Area      | value   |         [  QR  ]           |
+        | Service   | value   |                            |
+        | Pipe size | value   |                            |
+        | Run/Iso No| value   |                            |
+        | Paint Code| value   |          <code>            |
+        +---------------------+----------------------------+
+      (WO-... printed vertically up the left edge)
+
+    rows: dicts with keys  qr_id, iso, spool, area, service, size, page,
+                           paint, wo, batch
     """
     import qrcode
     from PIL import Image, ImageDraw
 
     DPI = 150
-    cell_w = round(LABEL_W_CM / 2.54 * DPI)           # 8.5 cm
-    cell_h = round(LABEL_H_CM / 2.54 * DPI)           # 5.2 cm
-    f_val = _font(17)
+    W = round(LABEL_W_CM / 2.54 * DPI)                # 502
+    H = round(LABEL_H_CM / 2.54 * DPI)                # 307
+
     f_lbl = _font(12)
-    f_spool = _font(19)
-    f_code = _font(12)
-    PAD = 12
+    f_val = _font(16)
+    f_val_sm = _font(13)
+    f_wo = _font(13)
+    f_code = _font(10)
+    f_titles = [_font(s) for s in (30, 26, 23, 20, 17, 15)]
+
+    STRIP = 22                                        # vertical WO column
+    TITLE_H = 44
+    LBL_W = 104                                       # label column width
+    GAP = 8
 
     def _clip(s: str, n: int) -> str:
         return s if len(s) <= n else s[:n - 1] + "…"
 
     pages: list[Image.Image] = []
     for r in rows:
-        page = Image.new("RGB", (cell_w, cell_h), "white")
-        pages.append(page)
-        draw = ImageDraw.Draw(page)
-        cx = cy = 0
-
-        # border just inside the page edge
-        draw.rectangle([cx, cy, cx + cell_w - 1, cy + cell_h - 1],
-                       outline="#999999", width=1)
-
         def _v(key: str) -> str:
-            return str(r.get(key) or "").strip() or "—"
+            return str(r.get(key) or "").strip() or "-"
 
-        jn = r.get("joints")
+        page = Image.new("RGB", (W, H), "white")
+        pages.append(page)
+        d = ImageDraw.Draw(page)
+
+        d.rectangle([0, 0, W - 1, H - 1], outline="black", width=2)
+
+        # ---- vertical WO strip, left edge ----
+        wo, bt = _v("wo"), _v("batch")
+        wo_txt = ("WO-" + wo if wo != "—" else "WO —")
+        if bt != "—":
+            wo_txt += "_" + bt
+        st_img = Image.new("RGB", (H - 12, STRIP - 3), "white")
+        ImageDraw.Draw(st_img).text((2, 1), wo_txt, fill="black", font=f_wo)
+        page.paste(st_img.rotate(90, expand=True), (3, 6))
+        d.line([(STRIP, 2), (STRIP, H - 2)], fill="black", width=1)
+
+        x0 = STRIP
+        inner_w = W - x0
+
+        # ---- title bar (ISO drawing no) ----
+        d.rectangle([x0, 2, W - 3, 2 + TITLE_H], outline="black", width=2)
+        title = _v("iso")
+        tf = next((f for f in f_titles
+                   if d.textlength(title, font=f) <= inner_w - 16), f_titles[-1])
+        d.text((x0 + (inner_w - d.textlength(title, font=tf)) / 2,
+                2 + (TITLE_H - _text_h(d, title, tf)) / 2 - 2),
+               title, fill="black", font=tf)
+
+        body_y0 = 2 + TITLE_H
+        # ---- QR box, right ----
+        qx0 = x0 + int(inner_w * 0.52)
+        d.rectangle([qx0, body_y0, W - 3, H - 3], outline="black", width=2)
+        code_h = _text_h(d, "A0", f_code) + 6
+        q = min(W - 3 - qx0 - 14, H - 3 - body_y0 - code_h - 12)
+        qimg = (qrcode.make(scan_url(base_url, r["qr_id"], kiosk_token),
+                            box_size=6, border=1)
+                .get_image().convert("RGB").resize((q, q)))
+        avail_h = H - 3 - body_y0 - code_h
+        page.paste(qimg, (qx0 + (W - 3 - qx0 - q) // 2,
+                          body_y0 + max(6, (avail_h - q) // 2)))
+        d.text((qx0 + (W - 3 - qx0 - d.textlength(str(r.get("qr_id", "")), font=f_code)) / 2,
+                H - 3 - code_h + 2), str(r.get("qr_id", "")),
+               fill="#666666", font=f_code)
+
+        # ---- field table, left ----
         fields = [
-            ("ISO", _v("iso")),
-            ("SPOOL", _v("spool") + (f"  ({jn} jt)" if jn else "")),
-            ("LINE", _v("line")),
-            ("PAGE", _v("page")),
-            ("AREA", _v("area")),
-            ("BATCH", _v("batch")),
-            ("WO", _v("wo")),
-            ("MATERIAL", _v("material")),
-            ("PAINT", _v("paint")),
+            ("Spool No.", _v("spool")),
+            ("Area", _v("area")),
+            ("Service", _v("service")),
+            ("Pipe size", _v("size")),
+            ("Run / Iso No", _v("page")),
+            ("Paint Code", _v("paint")),
         ]
-
-        # ---- QR on the right, vertically centred ----
-        q = min(cell_h - 2 * PAD, 196)
-        qr = qrcode.make(scan_url(base_url, r["qr_id"], kiosk_token),
-                         box_size=6, border=1).get_image().convert("RGB")
-        qr = qr.resize((q, q))
-        qx = cx + cell_w - PAD - q
-        page.paste(qr, (qx, cy + (cell_h - q) // 2))
-        draw.line([(qx - PAD, cy + 6), (qx - PAD, cy + cell_h - 6)],
-                  fill="#dddddd", width=1)
-
-        # ---- description on the left ----
-        x0 = cx + PAD
-        val_x = x0 + 60
-        val_w = qx - PAD - val_x
-        vchars = max(8, val_w // 8)
-        LINE_H = 24
-        block_h = LINE_H * (len(fields) + 1)
-        ty = cy + max(PAD, (cell_h - block_h) // 2)
+        d.rectangle([x0, body_y0, qx0, H - 3], outline="black", width=2)
+        d.line([(x0 + LBL_W, body_y0), (x0 + LBL_W, H - 3)],
+               fill="black", width=1)
+        rh = (H - 3 - body_y0) / len(fields)
+        val_chars = max(6, (qx0 - x0 - LBL_W - GAP - 4) // 8)
         for k, (lbl, val) in enumerate(fields):
-            yy = ty + k * LINE_H
-            draw.text((x0, yy + 3), lbl, fill="#777777", font=f_lbl)
-            draw.text((val_x, yy), _clip(val, vchars), fill="black",
-                      font=(f_spool if lbl == "SPOOL" else f_val))
-        draw.text((x0, ty + len(fields) * LINE_H + 2), r["qr_id"],
-                  fill="#999999", font=f_code)
+            yy = body_y0 + k * rh
+            if k:
+                d.line([(x0, yy), (qx0, yy)], fill="black", width=1)
+            d.text((x0 + 6, yy + (rh - _text_h(d, lbl, f_lbl)) / 2 - 1),
+                   lbl, fill="black", font=f_lbl)
+            vf = f_val if len(val) <= val_chars else f_val_sm
+            d.text((x0 + LBL_W + GAP, yy + (rh - _text_h(d, val, vf)) / 2 - 1),
+                   _clip(val, val_chars + 4), fill="black", font=vf)
 
     if not pages:
-        pages = [Image.new("RGB", (cell_w, cell_h), "white")]
+        pages = [Image.new("RGB", (W, H), "white")]
+
+    _last_pages.clear()
+    _last_pages.extend(pages)                         # for local preview / tests
 
     buf = io.BytesIO()
-    # resolution=DPI so the page prints as true A4 and the border comes
-    # out at the real 5.2 x 8.5 cm (print at 100% / "actual size")
     pages[0].save(buf, format="PDF", resolution=DPI, save_all=True,
                   append_images=pages[1:])
     return buf.getvalue()
