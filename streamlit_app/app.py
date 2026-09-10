@@ -1644,6 +1644,7 @@ def page_scan() -> None:
                       coalesce(line_no,'')        AS line_no,
                       coalesce(iso_run_no,'')     AS iso_run_no,
                       coalesce(dwg_spool_no,'')   AS dwg_spool_no,
+                      coalesce(area,'')           AS area,
                       coalesce(material_group,'') AS material_group,
                       coalesce(fitup_date,'')     AS fitup_date,
                       coalesce(welding_date,'')   AS welding_date,
@@ -1685,6 +1686,7 @@ def page_scan() -> None:
         ("SPOOL", uniq("dwg_spool_no")),
         ("LINE", uniq("line_no")),
         ("PAGE", uniq("iso_run_no")),
+        ("AREA", uniq("area")),
         ("BATCH", uniq("batch_no")),
         ("WO", uniq("wo_no")),
         ("MATERIAL", uniq("material_group")),
@@ -2055,6 +2057,7 @@ def page_qr_labels() -> None:
                    string_agg(DISTINCT nullif(line_no,''), ', ')        AS line,
                    string_agg(DISTINCT nullif(iso_run_no,''), ', ')     AS page,
                    string_agg(DISTINCT nullif(dwg_spool_no,''), ', ')   AS spool,
+                   string_agg(DISTINCT nullif(area,''), ', ')           AS area,
                    string_agg(DISTINCT nullif(material_group,''), ', ') AS material,
                    count(*)                                              AS joints
               FROM spools

@@ -78,7 +78,7 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "",
     f_val = _font(17)
     f_lbl = _font(12)
     f_spool = _font(20)
-    LINE_H = 18
+    LINE_H = 17
     LBL_X = 78                                        # value column offset
 
     def _clip(s: str, n: int = 30) -> str:
@@ -98,12 +98,6 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "",
         draw.rectangle([cx + 4, cy + 4, cx + cell_w - 4, cy + cell_h - 4],
                        outline="#cccccc", width=1)
 
-        qr = qrcode.make(scan_url(base_url, r["qr_id"], kiosk_token),
-                         box_size=6, border=1).get_image().convert("RGB")
-        q = min(cell_w - 30, cell_h - 8 * LINE_H - 30)
-        qr = qr.resize((q, q))
-        page.paste(qr, (cx + (cell_w - q) // 2, cy + 10))
-
         def _v(key: str) -> str:
             return str(r.get(key) or "").strip() or "—"
 
@@ -113,10 +107,17 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "",
             ("SPOOL", _v("spool") + (f"   ({jn} jt)" if jn else "")),
             ("LINE", _v("line")),
             ("PAGE", _v("page")),
+            ("AREA", _v("area")),
             ("BATCH", _v("batch")),
             ("WO", _v("wo")),
             ("MATERIAL", _v("material")),
         ]
+
+        qr = qrcode.make(scan_url(base_url, r["qr_id"], kiosk_token),
+                         box_size=6, border=1).get_image().convert("RGB")
+        q = min(cell_w - 30, cell_h - (len(fields) + 1) * LINE_H - 34)
+        qr = qr.resize((q, q))
+        page.paste(qr, (cx + (cell_w - q) // 2, cy + 10))
         ty = cy + 10 + q + 8
         for k, (lbl, val) in enumerate(fields):
             yy = ty + k * LINE_H
