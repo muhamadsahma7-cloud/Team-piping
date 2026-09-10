@@ -122,11 +122,9 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
 
         d.rectangle([0, 0, W - 1, H - 1], outline="black", width=2)
 
-        # ---- vertical WO strip, left edge ----
-        wo, bt = _v("wo"), _v("batch")
-        wo_txt = ("WO-" + wo if wo != "—" else "WO —")
-        if bt != "—":
-            wo_txt += "_" + bt
+        # ---- vertical WO strip, left edge (WO number only) ----
+        wo = _v("wo")
+        wo_txt = "WO-" + wo if wo != "-" else "WO -"
         st_img = Image.new("RGB", (H - 12, STRIP - 3), "white")
         ImageDraw.Draw(st_img).text((2, 1), wo_txt, fill="black", font=f_wo)
         page.paste(st_img.rotate(90, expand=True), (3, 6))
