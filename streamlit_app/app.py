@@ -1739,13 +1739,31 @@ def page_scan() -> None:
                    "appears here.")
         return
 
+    # Tap-to-fill recent names - this is server-side (who last used the app,
+    # not this device), so unlike a browser-remembered value it still works
+    # even though a fresh QR scan opens a brand-new, blank browser tab/session
+    # every time (that's why the text box itself can't "stay" pre-filled).
+    recent = db.query(
+        """SELECT worker_name, max(recorded_at) AS last_at
+             FROM field_updates WHERE coalesce(worker_name,'') <> ''
+            GROUP BY worker_name ORDER BY last_at DESC LIMIT 5""",
+        ttl=15,
+    )["worker_name"].tolist()
+    if recent:
+        st.caption("Recent")
+        rc = st.columns(len(recent))
+        for i, nm in enumerate(recent):
+            if rc[i].button(nm, key=f"recent_{i}", use_container_width=True):
+                st.session_state["scan_who_text"] = nm
+                st.rerun()
+
     # A plain text box (not a combo/selectbox) so the phone keyboard always
     # opens; matched against the roster as you type. key= (not value=) is
     # what makes Streamlit remember what was typed across reruns in this
-    # same browser tab - a fresh tab (a fresh scan) starts blank on purpose.
+    # same browser tab.
     _names = allw["name"].tolist()
     q = st.text_input("Your name", key="scan_who_text",
-                      placeholder="Type your name…").strip()
+                      placeholder="Type your name, or tap a recent name above…").strip()
     who = None
     if q:
         exact = [n for n in _names if n.lower() == q.lower()]
