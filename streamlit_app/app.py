@@ -1680,12 +1680,29 @@ def page_scan() -> None:
         return
 
     uniq = lambda col: ", ".join(sorted({x for x in js[col] if x})) or "—"
+    _info = [
+        ("ISO", uniq("iso_dwg_no")),
+        ("SPOOL", uniq("dwg_spool_no")),
+        ("LINE", uniq("line_no")),
+        ("PAGE", uniq("iso_run_no")),
+        ("BATCH", uniq("batch_no")),
+        ("WO", uniq("wo_no")),
+        ("MATERIAL", uniq("material_group")),
+    ]
+    _rows = "".join(
+        "<tr>"
+        "<td style='padding:4px 16px 4px 0;color:var(--muted);font-size:.82rem;"
+        "font-weight:700;letter-spacing:.06em;white-space:nowrap;"
+        "vertical-align:baseline'>" + lbl + "</td>"
+        "<td style='padding:4px 0;color:var(--ink);font-size:1.2rem;"
+        "font-weight:700;line-height:1.35'>" + html.escape(str(val)) + "</td>"
+        "</tr>"
+        for lbl, val in _info
+    )
     st.markdown(
-        f"### Spool {uniq('dwg_spool_no')}\n"
-        f"**WO** {uniq('wo_no')} &nbsp;·&nbsp; **Batch** {uniq('batch_no')} "
-        f"&nbsp;·&nbsp; **ISO** {uniq('iso_dwg_no')} &nbsp;·&nbsp; "
-        f"**Line** {uniq('line_no')} &nbsp;·&nbsp; **Page** {uniq('iso_run_no')} "
-        f"&nbsp;·&nbsp; **Material** {uniq('material_group')}"
+        "<table style='border-collapse:collapse;margin:.1rem 0 .6rem'>"
+        + _rows + "</table>",
+        unsafe_allow_html=True,
     )
 
     n = len(js)
