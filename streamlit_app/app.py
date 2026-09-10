@@ -1739,15 +1739,25 @@ def page_scan() -> None:
                    "appears here.")
         return
 
+    # A plain text box (not a combo/selectbox) so the phone keyboard always
+    # opens; matched against the roster as you type.
     _names = allw["name"].tolist()
-    _prev = st.session_state.get("scan_worker")
-    who = st.selectbox(
-        "Your name (type to search)", _names,
-        index=(_names.index(_prev) if _prev in _names else None),
-        placeholder="Type your name…",
-    )
+    q = st.text_input("Your name", value=st.session_state.get("scan_worker", ""),
+                      placeholder="Type your name…").strip()
+    who = None
+    if q:
+        exact = [n for n in _names if n.lower() == q.lower()]
+        matches = exact or [n for n in _names if q.lower() in n.lower()]
+        if len(matches) == 1:
+            who = matches[0]
+            st.caption(f"✓ {who}")
+        elif matches:
+            who = st.radio("Which one is you?", matches, key="scan_who_pick")
+        else:
+            st.warning(f"No fitter/welder matches \"{q}\". Check spelling, or "
+                       "register above.")
     if not who:
-        st.info("Pick your name to continue.")
+        st.info("Type your name above to continue.")
         _scan_history(code)
         return
     st.session_state["scan_worker"] = who        # pre-fill on the next spool
