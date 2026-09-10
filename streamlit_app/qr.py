@@ -109,6 +109,7 @@ def labels_pdf(rows: list[dict], base_url: str, *, kiosk_token: str = "") -> byt
             ("BATCH", _v("batch")),
             ("WO", _v("wo")),
             ("MATERIAL", _v("material")),
+            ("PAINT", _v("paint")),
         ]
 
         # ---- QR on the right, vertically centred ----

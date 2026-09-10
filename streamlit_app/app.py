@@ -1646,6 +1646,7 @@ def page_scan() -> None:
                       coalesce(dwg_spool_no,'')   AS dwg_spool_no,
                       coalesce(area,'')           AS area,
                       coalesce(material_group,'') AS material_group,
+                      coalesce(paint_system,'')   AS paint_system,
                       coalesce(fitup_date,'')     AS fitup_date,
                       coalesce(welding_date,'')   AS welding_date,
                       coalesce(fitup_by,'')       AS fitup_by,
@@ -1690,6 +1691,7 @@ def page_scan() -> None:
         ("BATCH", uniq("batch_no")),
         ("WO", uniq("wo_no")),
         ("MATERIAL", uniq("material_group")),
+        ("PAINT", uniq("paint_system")),
     ]
     _rows = "".join(
         "<tr>"
@@ -2059,6 +2061,7 @@ def page_qr_labels() -> None:
                    string_agg(DISTINCT nullif(dwg_spool_no,''), ', ')   AS spool,
                    string_agg(DISTINCT nullif(area,''), ', ')           AS area,
                    string_agg(DISTINCT nullif(material_group,''), ', ') AS material,
+                   string_agg(DISTINCT nullif(paint_system,''), ', ')   AS paint,
                    count(*)                                              AS joints
               FROM spools
              WHERE shop_field='S' AND coalesce(qr_id,'')<>'' {filt}
