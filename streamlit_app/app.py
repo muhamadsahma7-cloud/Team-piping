@@ -2749,14 +2749,27 @@ def _upsert_inventory(df: pd.DataFrame) -> tuple[int, int]:
     return updated, inserted
 
 
+@st.cache_resource
+def _ensure_bom_wo_no() -> bool:
+    """Idempotent DDL: bom.wo_no, added later than the rest of bom. Runs
+    once per server process."""
+    try:
+        db.execute("ALTER TABLE public.bom ADD COLUMN IF NOT EXISTS wo_no text")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_bom_wo_no ON public.bom (wo_no)")
+    except Exception:
+        pass
+    return True
+
+
 def _upsert_bom(df: pd.DataFrame) -> tuple[int, int]:
-    """For each row: update the matching BOM line (by ISO drawing + item
-    code + material + size + sch/rating) to the file's quantity/status,
-    or insert it if new. Returns (updated, inserted)."""
+    """For each row: update the matching BOM line (by ISO drawing + WO no +
+    item code + material + size + sch/rating) to the file's quantity/
+    status, or insert it if new. Returns (updated, inserted)."""
     updated = inserted = 0
     for _, row in df.iterrows():
         params = {
-            "iso": row.get("iso_drawing_number"), "st": row.get("status"),
+            "iso": row.get("iso_drawing_number"), "wo": row.get("wo_no"),
+            "st": row.get("status"),
             "ic": row.get("item_code"), "mg": row.get("material_grade"),
             "sz": row.get("size"), "sr": row.get("sch_rating"),
             "pn": row.get("part_name"), "de": row.get("description"),
@@ -2767,6 +2780,7 @@ def _upsert_bom(df: pd.DataFrame) -> tuple[int, int]:
                       part_name = coalesce(:pn, part_name),
                       description = coalesce(:de, description)
                WHERE coalesce(iso_drawing_number,'') = coalesce(:iso,'')
+                 AND coalesce(wo_no,'')               = coalesce(:wo,'')
                  AND coalesce(item_code,'')           = coalesce(:ic,'')
                  AND coalesce(material_grade,'')       = coalesce(:mg,'')
                  AND coalesce(size,'')                 = coalesce(:sz,'')
@@ -2778,9 +2792,9 @@ def _upsert_bom(df: pd.DataFrame) -> tuple[int, int]:
         else:
             db.execute(
                 """INSERT INTO bom
-                     (iso_drawing_number, status, item_code, material_grade, size,
-                      sch_rating, part_name, description, quantity)
-                   VALUES (:iso, :st, :ic, :mg, :sz, :sr, :pn, :de, :qty)""",
+                     (iso_drawing_number, wo_no, status, item_code, material_grade,
+                      size, sch_rating, part_name, description, quantity)
+                   VALUES (:iso, :wo, :st, :ic, :mg, :sz, :sr, :pn, :de, :qty)""",
                 params,
             )
             inserted += 1
@@ -2862,26 +2876,30 @@ def _material_import_ui(*, table: str, template_fn, parse_fn, upsert_fn,
 
 def page_inventory() -> None:
     st.header("Inventory")
+    _ensure_bom_wo_no()
     t_bom, t_stock, t_short = st.tabs(
         ["📋 Bill of materials", "📦 Stock", "⚠️ BOM vs inventory shortage"])
 
     with t_bom:
         bom = db.query(
-            "SELECT iso_drawing_number, status, item_code, part_name, description, "
-            "material_grade, size, sch_rating, quantity FROM bom "
+            "SELECT iso_drawing_number, status, wo_no, item_code, part_name, "
+            "description, material_grade, size, sch_rating, quantity FROM bom "
             "ORDER BY iso_drawing_number, item_code", ttl=30,
         )
         if "quantity" in bom.columns:
             bom["quantity"] = pd.to_numeric(bom["quantity"], errors="coerce")
         if not bom.empty:
-            f = st.columns([1, 2])
+            f = st.columns([1, 1, 2])
             statuses = f[0].multiselect("Status", sorted(bom["status"].dropna().unique()))
-            q = f[1].text_input("Search ISO drawing / item code / description",
+            wos = f[1].multiselect("WO no", sorted(bom["wo_no"].dropna().unique()))
+            q = f[2].text_input("Search ISO drawing / item code / description",
                                 placeholder="e.g. FDCX-K3204-004 or elbow",
                                 key="bom_search")
             view = bom
             if statuses:
                 view = view[view["status"].isin(statuses)]
+            if wos:
+                view = view[view["wo_no"].isin(wos)]
             if q.strip():
                 needle = q.strip().lower()
                 view = view[

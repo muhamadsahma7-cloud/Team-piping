@@ -158,6 +158,7 @@ create table if not exists public.bom (
     id                  bigint generated always as identity primary key,
     iso_drawing_number  text,
     status              text,
+    wo_no               text,
     material_grade      text,
     part_name           text,
     item_code           text,
@@ -167,9 +168,11 @@ create table if not exists public.bom (
     quantity            numeric,
     created_at          timestamptz not null default now()
 );
+alter table public.bom add column if not exists wo_no text;   -- added 2026-09-11
 create index if not exists idx_bom_item_code   on public.bom (item_code);
 create index if not exists idx_bom_iso_drawing on public.bom (iso_drawing_number);
 create index if not exists idx_bom_status      on public.bom (status);
+create index if not exists idx_bom_wo_no       on public.bom (wo_no);
 
 -- =====================================================================
 -- inventory  (stock on hand, from material_tracking.db)

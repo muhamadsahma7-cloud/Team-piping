@@ -569,6 +569,7 @@ def build_inventory_template_xlsx() -> bytes:
 BOM_IMPORT_MAP = {
     "ISO DRAWING NO": "iso_drawing_number",
     "STATUS": "status",
+    "WO NO": "wo_no",
     "ITEM CODE": "item_code",
     "PART NAME": "part_name",
     "DESCRIPTION": "description",
@@ -589,7 +590,7 @@ def build_bom_template_xlsx() -> bytes:
     """Blank, importable template for the BOM page's Excel upload."""
     return _material_template_xlsx(
         "BOM", list(BOM_IMPORT_MAP.keys()),
-        ["FDCX-K3204-004", "issued", "PS00001", "PIPE",
+        ["FDCX-K3204-004", "issued", "1.0", "PS00001", "PIPE",
          "PIPE, API5LGR.B, SMLS, PE, SCH 80, ASME B36.10M", "CS", "1", "SCH 80", 0.5],
     )
 
