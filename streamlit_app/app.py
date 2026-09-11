@@ -2712,12 +2712,116 @@ def page_qc_wcs() -> None:
         st.rerun()
 
 
+def _upsert_inventory(df: pd.DataFrame) -> tuple[int, int]:
+    """For each row: update the matching item (by item code + material +
+    size + sch/rating) to the file's quantity, or insert it if new.
+    Returns (updated, inserted)."""
+    updated = inserted = 0
+    for _, row in df.iterrows():
+        params = {
+            "ic": row.get("item_code"), "mg": row.get("material_grade"),
+            "sz": row.get("size"), "sr": row.get("sch_rating"),
+            "pn": row.get("part_name"), "de": row.get("description"),
+            "qty": float(row.get("quantity") or 0),
+        }
+        n = db.write(
+            """UPDATE inventory SET quantity = :qty,
+                      part_name = coalesce(:pn, part_name),
+                      description = coalesce(:de, description),
+                      updated_at = now()
+               WHERE coalesce(item_code,'')      = coalesce(:ic,'')
+                 AND coalesce(material_grade,'')  = coalesce(:mg,'')
+                 AND coalesce(size,'')            = coalesce(:sz,'')
+                 AND coalesce(sch_rating,'')      = coalesce(:sr,'')""",
+            params,
+        )
+        if n:
+            updated += 1
+        else:
+            db.execute(
+                """INSERT INTO inventory
+                     (item_code, material_grade, size, sch_rating, part_name,
+                      description, quantity)
+                   VALUES (:ic, :mg, :sz, :sr, :pn, :de, :qty)""",
+                params,
+            )
+            inserted += 1
+    return updated, inserted
+
+
 def page_inventory() -> None:
     st.header("Inventory")
     inv = db.query("SELECT * FROM inventory ORDER BY item_code")
     if "quantity" in inv.columns:
         inv["quantity"] = pd.to_numeric(inv["quantity"], errors="coerce")
     show_table(inv, "inventory")
+
+    st.subheader("Import from Excel")
+    st.caption("Download the template, fill in your stock, and upload it back. "
+               "Headers: " + ", ".join(reports.INVENTORY_IMPORT_MAP.keys()))
+    st.download_button(
+        "⬇ Download import template (.xlsx)",
+        data=reports.build_inventory_template_xlsx(),
+        file_name="inventory_template.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    up = st.file_uploader("Excel file (.xlsx)", type=["xlsx"], key="inv_upload")
+    if up is not None:
+        raw = pd.read_excel(up, engine="openpyxl")
+        clean, missing = reports.inventory_df_from_excel(raw)
+        st.write(f"File has **{len(raw):,}** row(s) → **{len(clean):,}** with an item code.")
+        if missing:
+            st.warning(f"Headers not found (blank for those): {', '.join(missing)}")
+        st.dataframe(clean.head(20), use_container_width=True, hide_index=True)
+
+        mode = st.radio(
+            "How to import",
+            ["Merge (add new / update matching items)", "Replace all inventory"],
+            horizontal=True,
+            help="Merge matches existing rows by item code + material + size + "
+                 "sch/rating and sets their quantity to the file's value; anything "
+                 "new is added. Replace wipes the table first.",
+        )
+        live_n = int(db.query("SELECT count(*) n FROM inventory", ttl=0).iloc[0]["n"])
+
+        if mode == "Replace all inventory":
+            confirm = st.checkbox(
+                f"I understand this deletes all {live_n:,} current row(s) and "
+                f"replaces them with {len(clean):,} from this file"
+            )
+            if st.button("🚚 Replace inventory now", type="primary",
+                         disabled=not confirm or clean.empty):
+                eng = db.engine()
+                from sqlalchemy import text as _t
+                with eng.begin() as cx:
+                    cx.execute(_t("TRUNCATE public.inventory RESTART IDENTITY"))
+                    clean.to_sql("inventory", cx, if_exists="append", index=False,
+                                chunksize=500, method="multi")
+                try:
+                    db.execute(
+                        "INSERT INTO user_log (username) VALUES (:u)",
+                        {"u": f"{st.session_state.get('user')} "
+                              f"[inventory import {len(clean)} rows, replace]"},
+                    )
+                except Exception:
+                    pass
+                st.cache_data.clear()
+                st.success(f"Replaced inventory with {len(clean):,} row(s).")
+                st.rerun()
+        else:
+            if st.button("🔀 Merge into inventory", type="primary", disabled=clean.empty):
+                updated, inserted = _upsert_inventory(clean)
+                try:
+                    db.execute(
+                        "INSERT INTO user_log (username) VALUES (:u)",
+                        {"u": f"{st.session_state.get('user')} [inventory import "
+                              f"{updated} updated, {inserted} added]"},
+                    )
+                except Exception:
+                    pass
+                st.cache_data.clear()
+                st.success(f"Updated {updated:,} item(s), added {inserted:,} new.")
+                st.rerun()
 
     st.subheader("BOM vs inventory shortage")
     scope = st.radio(

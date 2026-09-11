@@ -476,6 +476,79 @@ def spools_df_from_excel(raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     return df, missing
 
 
+# ----------------------------------------------------------------------
+# Excel -> inventory import
+# ----------------------------------------------------------------------
+INVENTORY_IMPORT_MAP = {
+    "ITEM CODE": "item_code",
+    "PART NAME": "part_name",
+    "DESCRIPTION": "description",
+    "MATERIAL GRADE": "material_grade",
+    "SIZE": "size",
+    "SCH / RATING": "sch_rating",
+    "QUANTITY": "quantity",
+}
+
+
+def inventory_df_from_excel(raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    """Map an uploaded stock sheet to inventory columns (header match is
+    case/whitespace tolerant). Returns (clean_df, missing_headers); rows
+    with no item code are dropped."""
+    norm = {" ".join(str(c).split()).upper(): c for c in raw.columns}
+    ren, missing = {}, []
+    for h, col in INVENTORY_IMPORT_MAP.items():
+        if h in norm:
+            ren[norm[h]] = col
+        else:
+            missing.append(h)
+    df = raw.rename(columns=ren)
+    cols = [c for c in INVENTORY_IMPORT_MAP.values() if c in df.columns]
+    df = df[cols].copy()
+
+    if "quantity" in df.columns:
+        df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0.0)
+
+    _NULLISH = {"", "nan", "nat", "none", "null", "#n/a", "n/a"}
+    text_cols = [c for c in cols if c != "quantity"]
+    if text_cols:
+        df[text_cols] = df[text_cols].astype(object).where(pd.notna(df[text_cols]), None)
+        for c in text_cols:
+            df[c] = df[c].map(
+                lambda v: None if v is None or str(v).strip().lower() in _NULLISH
+                else str(v).strip()
+            )
+    if "item_code" in df.columns:
+        df = df[df["item_code"].notna()].reset_index(drop=True)
+    return df, missing
+
+
+def build_inventory_template_xlsx() -> bytes:
+    """Blank, importable template for the Inventory page's Excel upload."""
+    from openpyxl import Workbook
+
+    headers = list(INVENTORY_IMPORT_MAP.keys())
+    example = ["PS00001", "PIPE", "PIPE, API5LGR.B, SMLS, PE, SCH 80, ASME B36.10M",
+               "CS", "1", "SCH 80", 4.5]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Inventory"
+    for j, h in enumerate(headers, 1):
+        c = ws.cell(1, j, h)
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", start_color="1F4E79")
+        c.alignment = Alignment(horizontal="center")
+    for j, v in enumerate(example, 1):
+        ws.cell(2, j, v)
+    for j, h in enumerate(headers, 1):
+        ws.column_dimensions[ws.cell(1, j).column_letter].width = max(len(h) + 4, 16)
+    ws.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def summary_status_counts(df: pd.DataFrame) -> dict[str, int]:
     """Spool-status tally, mirroring tabs/project_summary_tab.py (5 buckets)."""
     d = df[df["shop_field"] == "S"].copy()
