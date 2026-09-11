@@ -2922,6 +2922,48 @@ def page_activity() -> None:
             .reset_index().sort_values("last_activity", ascending=False))
     st.dataframe(summ, use_container_width=True, hide_index=True)
 
+    st.divider()
+    with st.expander("🗑 Reset activity log"):
+        total_n = int(db.query("SELECT count(*) n FROM user_log", ttl=0).iloc[0]["n"])
+        st.caption(f"`user_log` currently holds **{total_n:,}** row(s). This only "
+                   "clears the sign-in/activity history — it doesn't touch spools, "
+                   "manpower, or anything else.")
+        mode = st.radio("What to clear", ["Everything", "Older than a date"],
+                        horizontal=True, key="act_reset_mode")
+        cutoff = None
+        if mode == "Older than a date":
+            cutoff = st.date_input("Delete entries before", key="act_reset_cutoff",
+                                   value=date.today() - timedelta(days=90),
+                                   format="YYYY-MM-DD")
+            n_to_del = int(db.query(
+                "SELECT count(*) n FROM user_log WHERE login_time < :c",
+                {"c": cutoff.isoformat()}, ttl=0,
+            ).iloc[0]["n"])
+        else:
+            n_to_del = total_n
+        confirm = st.checkbox(
+            f"I understand this permanently deletes {n_to_del:,} row(s)",
+            key="act_reset_confirm",
+        )
+        if st.button("🗑 Reset activity log", type="primary",
+                     disabled=not (confirm and n_to_del)):
+            if cutoff is None:
+                db.execute("DELETE FROM user_log")
+            else:
+                db.execute("DELETE FROM user_log WHERE login_time < :c",
+                          {"c": cutoff.isoformat()})
+            try:
+                db.execute(
+                    "INSERT INTO user_log (username) VALUES (:u)",
+                    {"u": f"{st.session_state['user']} [reset activity log, "
+                          f"deleted {n_to_del}]"},
+                )
+            except Exception:
+                pass
+            st.cache_data.clear()
+            st.success(f"Deleted {n_to_del:,} row(s).")
+            st.rerun()
+
 
 _SNAP_PREFIX = "backup_spools_"
 
