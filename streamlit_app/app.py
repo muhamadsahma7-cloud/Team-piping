@@ -2717,20 +2717,29 @@ def page_inventory() -> None:
     inv = db.query("SELECT * FROM inventory ORDER BY item_code")
     if "quantity" in inv.columns:
         inv["quantity"] = pd.to_numeric(inv["quantity"], errors="coerce")
-    st.dataframe(inv, use_container_width=True, hide_index=True,
-                 column_config=num2_cfg(inv))
+    show_table(inv, "inventory")
 
     st.subheader("BOM vs inventory shortage")
+    scope = st.radio(
+        "Material needed for", ["Issued work orders", "All BOM (incl. not-yet-issued)"],
+        horizontal=True,
+        help="'Issued work orders' is what's actually being fabricated now — the "
+             "shortage that matters today. The other view also counts BOM lines "
+             "that haven't been issued yet, for planning ahead.",
+    )
+    status_where = ("AND lower(coalesce(status,''))='issued'" if scope == "Issued work orders"
+                    else "AND lower(coalesce(status,''))<>'hold'")
     short = db.query(
-        """
+        f"""
         WITH need AS (
             SELECT material_grade, part_name, item_code, description, size, sch_rating,
                    sum(quantity) AS qty_bom
             FROM bom
-            WHERE lower(coalesce(status,'')) NOT IN ('issued','hold')
+            WHERE coalesce(quantity,0) > 0 {status_where}
             GROUP BY 1,2,3,4,5,6
         )
-        SELECT n.item_code, n.description, n.size, n.sch_rating,
+        SELECT n.item_code, n.part_name, n.description, n.material_grade,
+               n.size, n.sch_rating,
                n.qty_bom,
                coalesce(sum(i.quantity),0) AS qty_stock,
                n.qty_bom - coalesce(sum(i.quantity),0) AS shortage
@@ -2740,16 +2749,44 @@ def page_inventory() -> None:
           AND coalesce(i.material_grade,'')= coalesce(n.material_grade,'')
           AND coalesce(i.size,'')          = coalesce(n.size,'')
           AND coalesce(i.sch_rating,'')    = coalesce(n.sch_rating,'')
-        GROUP BY 1,2,3,4,5
-        HAVING n.qty_bom - coalesce(sum(i.quantity),0) > 0
+        GROUP BY 1,2,3,4,5,6,7
+        HAVING n.qty_bom - coalesce(sum(i.quantity),0) > 0.001
         ORDER BY shortage DESC
-        """
+        """,
+        ttl=30,
     )
     for c in ("qty_bom", "qty_stock", "shortage"):
         if c in short.columns:
             short[c] = pd.to_numeric(short[c], errors="coerce")
-    st.dataframe(short, use_container_width=True, hide_index=True,
-                 column_config=num2_cfg(short))
+
+    q = st.text_input("Search item code / description", placeholder="e.g. PS00001 or elbow")
+    view = short
+    if q.strip():
+        needle = q.strip().lower()
+        view = short[
+            short["item_code"].str.lower().str.contains(needle, na=False)
+            | short["description"].str.lower().str.contains(needle, na=False)
+            | short["part_name"].str.lower().str.contains(needle, na=False)
+        ]
+
+    m = st.columns(2)
+    m[0].metric("Shortage line items", f"{len(view):,}", border=True)
+    m[1].metric("Total shortage qty", f"{view['shortage'].sum():,.2f}", border=True)
+
+    if short.empty:
+        st.success("No shortage — inventory covers " + scope.lower() + ".")
+    elif view.empty:
+        st.info("No shortage line matches that search.")
+    else:
+        show_table(
+            view.rename(columns={
+                "item_code": "Item code", "part_name": "Part name",
+                "description": "Description", "material_grade": "Material",
+                "size": "Size", "sch_rating": "Sch/rating",
+                "qty_bom": "BOM qty", "qty_stock": "In stock", "shortage": "Shortage",
+            }),
+            "bom_shortage",
+        )
 
 
 # gated tab  ->  {checkbox label: permission token}
