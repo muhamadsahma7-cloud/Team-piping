@@ -490,19 +490,21 @@ INVENTORY_IMPORT_MAP = {
 }
 
 
-def inventory_df_from_excel(raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
-    """Map an uploaded stock sheet to inventory columns (header match is
-    case/whitespace tolerant). Returns (clean_df, missing_headers); rows
-    with no item code are dropped."""
+def _material_df_from_excel(
+    raw: pd.DataFrame, mapping: dict[str, str], *, lower_cols: tuple[str, ...] = (),
+) -> tuple[pd.DataFrame, list[str]]:
+    """Shared tolerant-header mapper for the inventory / BOM importers.
+    Header match is case/whitespace tolerant. Returns (clean_df,
+    missing_headers); rows with no item code are dropped."""
     norm = {" ".join(str(c).split()).upper(): c for c in raw.columns}
     ren, missing = {}, []
-    for h, col in INVENTORY_IMPORT_MAP.items():
+    for h, col in mapping.items():
         if h in norm:
             ren[norm[h]] = col
         else:
             missing.append(h)
     df = raw.rename(columns=ren)
-    cols = [c for c in INVENTORY_IMPORT_MAP.values() if c in df.columns]
+    cols = [c for c in mapping.values() if c in df.columns]
     df = df[cols].copy()
 
     if "quantity" in df.columns:
@@ -517,22 +519,25 @@ def inventory_df_from_excel(raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]
                 lambda v: None if v is None or str(v).strip().lower() in _NULLISH
                 else str(v).strip()
             )
+    for c in lower_cols:
+        if c in df.columns:
+            df[c] = df[c].map(lambda v: v.lower() if isinstance(v, str) else v)
     if "item_code" in df.columns:
         df = df[df["item_code"].notna()].reset_index(drop=True)
     return df, missing
 
 
-def build_inventory_template_xlsx() -> bytes:
-    """Blank, importable template for the Inventory page's Excel upload."""
-    from openpyxl import Workbook
+def inventory_df_from_excel(raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    """Map an uploaded stock sheet to inventory columns."""
+    return _material_df_from_excel(raw, INVENTORY_IMPORT_MAP)
 
-    headers = list(INVENTORY_IMPORT_MAP.keys())
-    example = ["PS00001", "PIPE", "PIPE, API5LGR.B, SMLS, PE, SCH 80, ASME B36.10M",
-               "CS", "1", "SCH 80", 4.5]
+
+def _material_template_xlsx(sheet: str, headers: list[str], example: list) -> bytes:
+    from openpyxl import Workbook
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "Inventory"
+    ws.title = sheet
     for j, h in enumerate(headers, 1):
         c = ws.cell(1, j, h)
         c.font = Font(bold=True, color="FFFFFF")
@@ -547,6 +552,46 @@ def build_inventory_template_xlsx() -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def build_inventory_template_xlsx() -> bytes:
+    """Blank, importable template for the Inventory page's stock upload."""
+    return _material_template_xlsx(
+        "Inventory", list(INVENTORY_IMPORT_MAP.keys()),
+        ["PS00001", "PIPE", "PIPE, API5LGR.B, SMLS, PE, SCH 80, ASME B36.10M",
+         "CS", "1", "SCH 80", 4.5],
+    )
+
+
+# ----------------------------------------------------------------------
+# Excel -> bom import
+# ----------------------------------------------------------------------
+BOM_IMPORT_MAP = {
+    "ISO DRAWING NO": "iso_drawing_number",
+    "STATUS": "status",
+    "ITEM CODE": "item_code",
+    "PART NAME": "part_name",
+    "DESCRIPTION": "description",
+    "MATERIAL GRADE": "material_grade",
+    "SIZE": "size",
+    "SCH / RATING": "sch_rating",
+    "QUANTITY": "quantity",
+}
+
+
+def bom_df_from_excel(raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    """Map an uploaded BOM sheet to bom columns (status lower-cased to
+    match 'issued' / 'unissued' / 'hold')."""
+    return _material_df_from_excel(raw, BOM_IMPORT_MAP, lower_cols=("status",))
+
+
+def build_bom_template_xlsx() -> bytes:
+    """Blank, importable template for the BOM page's Excel upload."""
+    return _material_template_xlsx(
+        "BOM", list(BOM_IMPORT_MAP.keys()),
+        ["FDCX-K3204-004", "issued", "PS00001", "PIPE",
+         "PIPE, API5LGR.B, SMLS, PE, SCH 80, ASME B36.10M", "CS", "1", "SCH 80", 0.5],
+    )
 
 
 def summary_status_counts(df: pd.DataFrame) -> dict[str, int]:

@@ -2749,148 +2749,243 @@ def _upsert_inventory(df: pd.DataFrame) -> tuple[int, int]:
     return updated, inserted
 
 
+def _upsert_bom(df: pd.DataFrame) -> tuple[int, int]:
+    """For each row: update the matching BOM line (by ISO drawing + item
+    code + material + size + sch/rating) to the file's quantity/status,
+    or insert it if new. Returns (updated, inserted)."""
+    updated = inserted = 0
+    for _, row in df.iterrows():
+        params = {
+            "iso": row.get("iso_drawing_number"), "st": row.get("status"),
+            "ic": row.get("item_code"), "mg": row.get("material_grade"),
+            "sz": row.get("size"), "sr": row.get("sch_rating"),
+            "pn": row.get("part_name"), "de": row.get("description"),
+            "qty": float(row.get("quantity") or 0),
+        }
+        n = db.write(
+            """UPDATE bom SET quantity = :qty, status = coalesce(:st, status),
+                      part_name = coalesce(:pn, part_name),
+                      description = coalesce(:de, description)
+               WHERE coalesce(iso_drawing_number,'') = coalesce(:iso,'')
+                 AND coalesce(item_code,'')           = coalesce(:ic,'')
+                 AND coalesce(material_grade,'')       = coalesce(:mg,'')
+                 AND coalesce(size,'')                 = coalesce(:sz,'')
+                 AND coalesce(sch_rating,'')           = coalesce(:sr,'')""",
+            params,
+        )
+        if n:
+            updated += 1
+        else:
+            db.execute(
+                """INSERT INTO bom
+                     (iso_drawing_number, status, item_code, material_grade, size,
+                      sch_rating, part_name, description, quantity)
+                   VALUES (:iso, :st, :ic, :mg, :sz, :sr, :pn, :de, :qty)""",
+                params,
+            )
+            inserted += 1
+    return updated, inserted
+
+
+def _material_import_ui(*, table: str, template_fn, parse_fn, upsert_fn,
+                        key_desc: str, upload_key: str) -> None:
+    """Shared 'download template -> upload -> merge or replace' block for
+    the Inventory / BOM tabs."""
+    st.caption("Download the template, fill it in, and upload it back.")
+    st.download_button(
+        "⬇ Download import template (.xlsx)", data=template_fn(),
+        file_name=f"{table}_template.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=f"{upload_key}_tpl",
+    )
+    up = st.file_uploader("Excel file (.xlsx)", type=["xlsx"], key=upload_key)
+    if up is None:
+        return
+    raw = pd.read_excel(up, engine="openpyxl")
+    clean, missing = parse_fn(raw)
+    st.write(f"File has **{len(raw):,}** row(s) → **{len(clean):,}** with an item code.")
+    if missing:
+        st.warning(f"Headers not found (blank for those): {', '.join(missing)}")
+    st.dataframe(clean.head(20), use_container_width=True, hide_index=True)
+
+    mode = st.radio(
+        "How to import", [f"Merge (add new / update matching {table})",
+                          f"Replace all {table}"],
+        horizontal=True, key=f"{upload_key}_mode",
+        help=f"Merge matches existing rows by {key_desc} and sets their quantity "
+             "(and status, for BOM) to the file's value; anything new is added. "
+             "Replace wipes the table first.",
+    )
+    live_n = int(db.query(f"SELECT count(*) n FROM {table}", ttl=0).iloc[0]["n"])
+
+    if mode.startswith("Replace"):
+        confirm = st.checkbox(
+            f"I understand this deletes all {live_n:,} current row(s) and "
+            f"replaces them with {len(clean):,} from this file",
+            key=f"{upload_key}_confirm",
+        )
+        if st.button(f"🚚 Replace {table} now", type="primary",
+                     disabled=not confirm or clean.empty, key=f"{upload_key}_replace"):
+            eng = db.engine()
+            from sqlalchemy import text as _t
+            with eng.begin() as cx:
+                cx.execute(_t(f"TRUNCATE public.{table} RESTART IDENTITY"))
+                clean.to_sql(table, cx, if_exists="append", index=False,
+                            chunksize=500, method="multi")
+            try:
+                db.execute(
+                    "INSERT INTO user_log (username) VALUES (:u)",
+                    {"u": f"{st.session_state.get('user')} "
+                          f"[{table} import {len(clean)} rows, replace]"},
+                )
+            except Exception:
+                pass
+            st.cache_data.clear()
+            st.success(f"Replaced {table} with {len(clean):,} row(s).")
+            st.rerun()
+    else:
+        if st.button(f"🔀 Merge into {table}", type="primary", disabled=clean.empty,
+                    key=f"{upload_key}_merge"):
+            updated, inserted = upsert_fn(clean)
+            try:
+                db.execute(
+                    "INSERT INTO user_log (username) VALUES (:u)",
+                    {"u": f"{st.session_state.get('user')} [{table} import "
+                          f"{updated} updated, {inserted} added]"},
+                )
+            except Exception:
+                pass
+            st.cache_data.clear()
+            st.success(f"Updated {updated:,} item(s), added {inserted:,} new.")
+            st.rerun()
+
+
 def page_inventory() -> None:
     st.header("Inventory")
-    inv = db.query("SELECT * FROM inventory ORDER BY item_code")
-    if "quantity" in inv.columns:
-        inv["quantity"] = pd.to_numeric(inv["quantity"], errors="coerce")
-    show_table(inv, "inventory")
+    t_bom, t_stock, t_short = st.tabs(
+        ["📋 Bill of materials", "📦 Stock", "⚠️ BOM vs inventory shortage"])
 
-    st.subheader("Import from Excel")
-    st.caption("Download the template, fill in your stock, and upload it back. "
-               "Headers: " + ", ".join(reports.INVENTORY_IMPORT_MAP.keys()))
-    st.download_button(
-        "⬇ Download import template (.xlsx)",
-        data=reports.build_inventory_template_xlsx(),
-        file_name="inventory_template.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-    up = st.file_uploader("Excel file (.xlsx)", type=["xlsx"], key="inv_upload")
-    if up is not None:
-        raw = pd.read_excel(up, engine="openpyxl")
-        clean, missing = reports.inventory_df_from_excel(raw)
-        st.write(f"File has **{len(raw):,}** row(s) → **{len(clean):,}** with an item code.")
-        if missing:
-            st.warning(f"Headers not found (blank for those): {', '.join(missing)}")
-        st.dataframe(clean.head(20), use_container_width=True, hide_index=True)
-
-        mode = st.radio(
-            "How to import",
-            ["Merge (add new / update matching items)", "Replace all inventory"],
-            horizontal=True,
-            help="Merge matches existing rows by item code + material + size + "
-                 "sch/rating and sets their quantity to the file's value; anything "
-                 "new is added. Replace wipes the table first.",
+    with t_bom:
+        bom = db.query(
+            "SELECT iso_drawing_number, status, item_code, part_name, description, "
+            "material_grade, size, sch_rating, quantity FROM bom "
+            "ORDER BY iso_drawing_number, item_code", ttl=30,
         )
-        live_n = int(db.query("SELECT count(*) n FROM inventory", ttl=0).iloc[0]["n"])
-
-        if mode == "Replace all inventory":
-            confirm = st.checkbox(
-                f"I understand this deletes all {live_n:,} current row(s) and "
-                f"replaces them with {len(clean):,} from this file"
-            )
-            if st.button("🚚 Replace inventory now", type="primary",
-                         disabled=not confirm or clean.empty):
-                eng = db.engine()
-                from sqlalchemy import text as _t
-                with eng.begin() as cx:
-                    cx.execute(_t("TRUNCATE public.inventory RESTART IDENTITY"))
-                    clean.to_sql("inventory", cx, if_exists="append", index=False,
-                                chunksize=500, method="multi")
-                try:
-                    db.execute(
-                        "INSERT INTO user_log (username) VALUES (:u)",
-                        {"u": f"{st.session_state.get('user')} "
-                              f"[inventory import {len(clean)} rows, replace]"},
-                    )
-                except Exception:
-                    pass
-                st.cache_data.clear()
-                st.success(f"Replaced inventory with {len(clean):,} row(s).")
-                st.rerun()
+        if "quantity" in bom.columns:
+            bom["quantity"] = pd.to_numeric(bom["quantity"], errors="coerce")
+        if not bom.empty:
+            f = st.columns([1, 2])
+            statuses = f[0].multiselect("Status", sorted(bom["status"].dropna().unique()))
+            q = f[1].text_input("Search ISO drawing / item code / description",
+                                placeholder="e.g. FDCX-K3204-004 or elbow",
+                                key="bom_search")
+            view = bom
+            if statuses:
+                view = view[view["status"].isin(statuses)]
+            if q.strip():
+                needle = q.strip().lower()
+                view = view[
+                    view["iso_drawing_number"].str.lower().str.contains(needle, na=False)
+                    | view["item_code"].str.lower().str.contains(needle, na=False)
+                    | view["description"].str.lower().str.contains(needle, na=False)
+                ]
+            st.caption(f"{len(view):,} of {len(bom):,} line(s)")
+            show_table(view, "bom")
         else:
-            if st.button("🔀 Merge into inventory", type="primary", disabled=clean.empty):
-                updated, inserted = _upsert_inventory(clean)
-                try:
-                    db.execute(
-                        "INSERT INTO user_log (username) VALUES (:u)",
-                        {"u": f"{st.session_state.get('user')} [inventory import "
-                              f"{updated} updated, {inserted} added]"},
-                    )
-                except Exception:
-                    pass
-                st.cache_data.clear()
-                st.success(f"Updated {updated:,} item(s), added {inserted:,} new.")
-                st.rerun()
+            st.info("No BOM lines yet — import one below.")
 
-    st.subheader("BOM vs inventory shortage")
-    scope = st.radio(
-        "Material needed for", ["Issued work orders", "All BOM (incl. not-yet-issued)"],
-        horizontal=True,
-        help="'Issued work orders' is what's actually being fabricated now — the "
-             "shortage that matters today. The other view also counts BOM lines "
-             "that haven't been issued yet, for planning ahead.",
-    )
-    status_where = ("AND lower(coalesce(status,''))='issued'" if scope == "Issued work orders"
-                    else "AND lower(coalesce(status,''))<>'hold'")
-    short = db.query(
-        f"""
-        WITH need AS (
-            SELECT material_grade, part_name, item_code, description, size, sch_rating,
-                   sum(quantity) AS qty_bom
-            FROM bom
-            WHERE coalesce(quantity,0) > 0 {status_where}
-            GROUP BY 1,2,3,4,5,6
+        st.subheader("Import from Excel")
+        _material_import_ui(
+            table="bom", template_fn=reports.build_bom_template_xlsx,
+            parse_fn=reports.bom_df_from_excel, upsert_fn=_upsert_bom,
+            key_desc="ISO drawing + item code + material + size + sch/rating",
+            upload_key="bom_upload",
         )
-        SELECT n.item_code, n.part_name, n.description, n.material_grade,
-               n.size, n.sch_rating,
-               n.qty_bom,
-               coalesce(sum(i.quantity),0) AS qty_stock,
-               n.qty_bom - coalesce(sum(i.quantity),0) AS shortage
-        FROM need n
-        LEFT JOIN inventory i
-          ON  coalesce(i.item_code,'')     = coalesce(n.item_code,'')
-          AND coalesce(i.material_grade,'')= coalesce(n.material_grade,'')
-          AND coalesce(i.size,'')          = coalesce(n.size,'')
-          AND coalesce(i.sch_rating,'')    = coalesce(n.sch_rating,'')
-        GROUP BY 1,2,3,4,5,6,7
-        HAVING n.qty_bom - coalesce(sum(i.quantity),0) > 0.001
-        ORDER BY shortage DESC
-        """,
-        ttl=30,
-    )
-    for c in ("qty_bom", "qty_stock", "shortage"):
-        if c in short.columns:
-            short[c] = pd.to_numeric(short[c], errors="coerce")
 
-    q = st.text_input("Search item code / description", placeholder="e.g. PS00001 or elbow")
-    view = short
-    if q.strip():
-        needle = q.strip().lower()
-        view = short[
-            short["item_code"].str.lower().str.contains(needle, na=False)
-            | short["description"].str.lower().str.contains(needle, na=False)
-            | short["part_name"].str.lower().str.contains(needle, na=False)
-        ]
+    with t_stock:
+        inv = db.query("SELECT * FROM inventory ORDER BY item_code")
+        if "quantity" in inv.columns:
+            inv["quantity"] = pd.to_numeric(inv["quantity"], errors="coerce")
+        show_table(inv, "inventory")
 
-    m = st.columns(2)
-    m[0].metric("Shortage line items", f"{len(view):,}", border=True)
-    m[1].metric("Total shortage qty", f"{view['shortage'].sum():,.2f}", border=True)
-
-    if short.empty:
-        st.success("No shortage — inventory covers " + scope.lower() + ".")
-    elif view.empty:
-        st.info("No shortage line matches that search.")
-    else:
-        show_table(
-            view.rename(columns={
-                "item_code": "Item code", "part_name": "Part name",
-                "description": "Description", "material_grade": "Material",
-                "size": "Size", "sch_rating": "Sch/rating",
-                "qty_bom": "BOM qty", "qty_stock": "In stock", "shortage": "Shortage",
-            }),
-            "bom_shortage",
+        st.subheader("Import from Excel")
+        _material_import_ui(
+            table="inventory", template_fn=reports.build_inventory_template_xlsx,
+            parse_fn=reports.inventory_df_from_excel, upsert_fn=_upsert_inventory,
+            key_desc="item code + material + size + sch/rating",
+            upload_key="inv_upload",
         )
+
+    with t_short:
+        scope = st.radio(
+            "Material needed for", ["Issued work orders", "All BOM (incl. not-yet-issued)"],
+            horizontal=True,
+            help="'Issued work orders' is what's actually being fabricated now — the "
+                 "shortage that matters today. The other view also counts BOM lines "
+                 "that haven't been issued yet, for planning ahead.",
+        )
+        status_where = ("AND lower(coalesce(status,''))='issued'"
+                        if scope == "Issued work orders"
+                        else "AND lower(coalesce(status,''))<>'hold'")
+        short = db.query(
+            f"""
+            WITH need AS (
+                SELECT material_grade, part_name, item_code, description, size, sch_rating,
+                       sum(quantity) AS qty_bom
+                FROM bom
+                WHERE coalesce(quantity,0) > 0 {status_where}
+                GROUP BY 1,2,3,4,5,6
+            )
+            SELECT n.item_code, n.part_name, n.description, n.material_grade,
+                   n.size, n.sch_rating,
+                   n.qty_bom,
+                   coalesce(sum(i.quantity),0) AS qty_stock,
+                   n.qty_bom - coalesce(sum(i.quantity),0) AS shortage
+            FROM need n
+            LEFT JOIN inventory i
+              ON  coalesce(i.item_code,'')     = coalesce(n.item_code,'')
+              AND coalesce(i.material_grade,'')= coalesce(n.material_grade,'')
+              AND coalesce(i.size,'')          = coalesce(n.size,'')
+              AND coalesce(i.sch_rating,'')    = coalesce(n.sch_rating,'')
+            GROUP BY 1,2,3,4,5,6,7
+            HAVING n.qty_bom - coalesce(sum(i.quantity),0) > 0.001
+            ORDER BY shortage DESC
+            """,
+            ttl=30,
+        )
+        for c in ("qty_bom", "qty_stock", "shortage"):
+            if c in short.columns:
+                short[c] = pd.to_numeric(short[c], errors="coerce")
+
+        q = st.text_input("Search item code / description",
+                          placeholder="e.g. PS00001 or elbow", key="short_search")
+        view = short
+        if q.strip():
+            needle = q.strip().lower()
+            view = short[
+                short["item_code"].str.lower().str.contains(needle, na=False)
+                | short["description"].str.lower().str.contains(needle, na=False)
+                | short["part_name"].str.lower().str.contains(needle, na=False)
+            ]
+
+        m = st.columns(2)
+        m[0].metric("Shortage line items", f"{len(view):,}", border=True)
+        m[1].metric("Total shortage qty", f"{view['shortage'].sum():,.2f}", border=True)
+
+        if short.empty:
+            st.success("No shortage — inventory covers " + scope.lower() + ".")
+        elif view.empty:
+            st.info("No shortage line matches that search.")
+        else:
+            show_table(
+                view.rename(columns={
+                    "item_code": "Item code", "part_name": "Part name",
+                    "description": "Description", "material_grade": "Material",
+                    "size": "Size", "sch_rating": "Sch/rating",
+                    "qty_bom": "BOM qty", "qty_stock": "In stock", "shortage": "Shortage",
+                }),
+                "bom_shortage",
+            )
 
 
 # gated tab  ->  {checkbox label: permission token}
