@@ -76,9 +76,9 @@ Sign in as `admin` on the new URL, then:
 - **Users & access** — add the rest of that project's users.
 - **Targets & plan** — set plan start / target / rest days / holidays.
 - **Manpower** — start logging daily fitter/welder counts.
-- `bom` / `inventory`: no in-app importer yet — load with
-  `supabase/migrate_from_sqlite.py --only bom` style, or `INSERT`s in the
-  SQL Editor, if that project uses them.
+- **Inventory → Bill of materials / Stock** — download the template, fill
+  it in, upload it back (Merge or Replace) for that project's `bom` and
+  `inventory`, if it uses them.
 
 ---
 
