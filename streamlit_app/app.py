@@ -918,6 +918,14 @@ def page_overview() -> None:
         d["welding_bal"] = (d["dia_inch"] - d["welding_di"]).round(2)
         d["fitup_%"] = (d["fitup_di"] / di * 100).round(1).fillna(0)
         d["welding_%"] = (d["welding_di"] / di * 100).round(1).fillna(0)
+        # the progress bar rounds to whole percent - on a big enough group a
+        # few dia-inch of balance can vanish into that rounding and read as
+        # "100%" while a balance still shows. Never claim 100% while there's
+        # a real balance left.
+        d.loc[d["fitup_bal"] > 0.005, "fitup_%"] = d.loc[d["fitup_bal"] > 0.005,
+                                                          "fitup_%"].clip(upper=99)
+        d.loc[d["welding_bal"] > 0.005, "welding_%"] = d.loc[d["welding_bal"] > 0.005,
+                                                              "welding_%"].clip(upper=99)
         return d[[dim, "spools", "spool_done", "joints", "dia_inch",
                   "fitup_di", "fitup_bal", "fitup_%",
                   "welding_di", "welding_bal", "welding_%"]]
