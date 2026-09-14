@@ -850,26 +850,74 @@ def page_overview() -> None:
         """,
         {"asof": asof.isoformat()}, ttl=30,
     )
-    if sc.empty:
+    # planned cumulative curve, from the same plan/scope Targets & plan uses
+    cfg = db.get_settings()
+    plan_curve = None
+    if cfg.get("plan_start") and cfg.get("target_date"):
+        plan_start = pd.to_datetime(cfg["plan_start"]).date()
+        target_date = pd.to_datetime(cfg["target_date"]).date()
+        scope = cfg.get("scope", "issued")
+        _rr = cfg.get("rest")
+        rest_s = set(int(x) for x in _rr.split(",") if x) if _rr is not None else {6}
+        hol_s, _ = _parse_dates(cfg.get("holidays") or "")
+        scope_where = ("AND lower(coalesce(status,''))='issued' "
+                       "AND upper(trim(coalesce(workable,'')))='Y'") if scope == "issued" else ""
+        scope_di = float(db.query(
+            f"SELECT coalesce(sum(joint_size),0) v FROM spools WHERE shop_field='S' {scope_where}",
+            ttl=60,
+        ).iloc[0]["v"])
+        total_wd = _wdays(plan_start, target_date, rest_s, hol_s)
+        if total_wd > 0 and target_date >= plan_start:
+            planned_per_day = scope_di / total_wd
+            end = max(target_date, asof, plan_start)
+            idx = pd.date_range(plan_start, end, freq="D")
+            plan_curve = pd.DataFrame({
+                "d": idx,
+                "k": "Plan",
+                "Cumulative dia-inch": [
+                    min(planned_per_day * _wdays(plan_start, min(x.date(), target_date),
+                                                 rest_s, hol_s), scope_di)
+                    for x in idx
+                ],
+            })
+
+    if sc.empty and plan_curve is None:
         st.caption("No dated activity yet.")
     else:
-        sc["d"] = pd.to_datetime(sc["d"])
-        sc["v"] = sc["v"].astype(float)
-        sc = sc.sort_values("d")
-        sc["Cumulative dia-inch"] = sc.groupby("k")["v"].cumsum()
+        if not sc.empty:
+            sc["d"] = pd.to_datetime(sc["d"])
+            sc["v"] = sc["v"].astype(float)
+            sc = sc.sort_values("d")
+            sc["Cumulative dia-inch"] = sc.groupby("k")["v"].cumsum()
+            sc = sc[["d", "k", "Cumulative dia-inch"]]
+        else:
+            sc = pd.DataFrame(columns=["d", "k", "Cumulative dia-inch"])
+        if plan_curve is not None:
+            sc = pd.concat([plan_curve, sc], ignore_index=True)
+        else:
+            st.caption("No plan set — add one on **Targets & plan** to overlay it here.")
+
+        title = ("Plan vs fit-up vs welding" if plan_curve is not None
+                 else "Cumulative fit-up vs welding")
         st.altair_chart(
-            dark_alt(alt.Chart(sc).mark_line(point=True).encode(
+            dark_alt(alt.Chart(sc).mark_line().encode(
                 x=alt.X("d:T", title="Date"),
                 y=alt.Y("Cumulative dia-inch:Q", title="Cumulative dia-inch"),
                 color=alt.Color("k:N", title="Activity",
-                                scale=alt.Scale(domain=["Fit-up", "Welding"],
-                                                range=["#5ea0ff", "#34d399"])),
+                                scale=alt.Scale(domain=["Plan", "Fit-up", "Welding"],
+                                                range=["#8aa0bd", "#5ea0ff", "#34d399"])),
+                strokeDash=alt.StrokeDash(
+                    "k:N", legend=None,
+                    scale=alt.Scale(domain=["Plan", "Fit-up", "Welding"],
+                                    range=[[5, 4], [1, 0], [1, 0]])),
+                strokeWidth=alt.condition("datum.k == 'Plan'", alt.value(2),
+                                          alt.value(2.5)),
                 tooltip=[alt.Tooltip("d:T", title="date"), "k:N",
                          alt.Tooltip("Cumulative dia-inch:Q", format=",.1f")],
             ).properties(
                 height=300,
                 title=alt.TitleParams(
-                    f"Cumulative fit-up vs welding — as of {asof.isoformat()}",
+                    f"{title} — as of {asof.isoformat()}",
                     anchor="start", fontSize=14, fontWeight="bold"),
             )),
             use_container_width=True,
