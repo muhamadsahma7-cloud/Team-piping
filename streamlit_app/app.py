@@ -868,15 +868,14 @@ def page_overview() -> None:
         ).iloc[0]["v"])
         total_wd = _wdays(plan_start, target_date, rest_s, hol_s)
         if total_wd > 0 and target_date >= plan_start:
-            planned_per_day = scope_di / total_wd
             end = max(target_date, asof, plan_start)
             idx = pd.date_range(plan_start, end, freq="D")
             plan_curve = pd.DataFrame({
                 "d": idx,
                 "k": "Plan",
                 "Cumulative dia-inch": [
-                    min(planned_per_day * _wdays(plan_start, min(x.date(), target_date),
-                                                 rest_s, hol_s), scope_di)
+                    scope_di * _s_curve(_wdays(plan_start, min(x.date(), target_date),
+                                               rest_s, hol_s) / total_wd)
                     for x in idx
                 ],
             })
@@ -1021,6 +1020,14 @@ def _add_wdays(start: date, n: int, rest: set[int], holidays: set[date]) -> date
         if _is_working(d, rest, holidays):
             left -= 1
     return d
+
+
+def _s_curve(t: float) -> float:
+    """Smoothstep easing over progress fraction t in [0,1]: flat start,
+    steep middle, flat finish - the classic S-curve shape (mobilisation ->
+    peak momentum -> tapering off), instead of a straight linear ramp."""
+    t = 0.0 if t < 0 else (1.0 if t > 1 else t)
+    return t * t * (3 - 2 * t)
 
 
 def _parse_dates(text: str) -> tuple[set[date], list[str]]:
@@ -1290,8 +1297,9 @@ def page_targets() -> None:
         with st.expander(f"{name}: planned vs actual vs recovery"):
             act = (sdf.assign(dt=pd.to_datetime(sdf["dt"])).set_index("dt")["di"]
                    .reindex(idx, fill_value=0).cumsum())
-            planned = [min(ppd * _wdays(plan_start, min(x.date(), target_date), rest_s, hol_s),
-                           scope_di) for x in idx]
+            planned = [scope_di * _s_curve(_wdays(plan_start, min(x.date(), target_date),
+                                                  rest_s, hol_s) / total_wd)
+                      for x in idx]
             frame = {"Planned": planned, "Actual": act.values}
             done_n = float(act.get(pd.Timestamp(today), act.iloc[-1] if len(act) else 0.0))
             bal_n = max(scope_di - done_n, 0.0)
