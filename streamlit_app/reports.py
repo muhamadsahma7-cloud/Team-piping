@@ -22,6 +22,19 @@ _SS_RELEASE = {"SS304", "SS_304", "SS316", "SS_316"}
 _SS_PAINT_SKIP = {"SS", "SS304", "SS316"}
 
 
+def _is_straight_pipe(sdf: pd.DataFrame) -> bool:
+    """Straight pipe vs fabricated spool. Prefers the explicit spool_type
+    column (set via master Excel import or Data admin); falls back to the
+    legacy 'DWG SPOOL NO starts with SP-SPL' guess for rows not yet
+    annotated, so older un-annotated data keeps classifying the same way."""
+    if "spool_type" in sdf.columns:
+        vals = sdf["spool_type"].fillna("").astype(str).str.strip()
+        vals = vals[vals != ""]
+        if not vals.empty:
+            return vals.iloc[0].upper().startswith("STRAIGHT")
+    return sdf["dwg_spool_no"].str.startswith("SP-SPL").all()
+
+
 def classify(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     for c in ("line_no", "iso_dwg_no", "dwg_spool_no", "iso_run_no"):
@@ -41,7 +54,7 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
 
     status_map: dict[str, str] = {}
     for key, sdf in df.groupby("spool_key"):
-        is_straight = sdf["dwg_spool_no"].str.startswith("SP-SPL").all()
+        is_straight = _is_straight_pipe(sdf)
         if not is_straight:
             sdf = sdf[sdf["shop_field"] == "S"]
             if sdf.empty:
@@ -93,8 +106,8 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
 
 _CLASSIFIED_COLS = [
     "spool_key", "wo_no", "batch_no", "material_group", "zone", "service", "line_no",
-    "iso_dwg_no", "dwg_spool_no", "iso_run_no", "rev", "shop_field", "joint_no",
-    "joint_size", "welding_type", "pwht", "fitup_date", "welding_date",
+    "iso_dwg_no", "dwg_spool_no", "iso_run_no", "rev", "shop_field", "spool_type",
+    "joint_no", "joint_size", "welding_type", "pwht", "fitup_date", "welding_date",
     "fitup_inspection_date", "welding_inspection_date", "irn_date",
     "delivery_date", "site_delivery_date", "paint_system", "paint_status",
     "Spool Status",
@@ -186,8 +199,8 @@ def build_classified_xlsx(df: pd.DataFrame) -> bytes:
             [["Location", "Pipe Spools", "Joints", "Dia-Inch", "% Dia-Inch"]])
 
     _pss_cols = ["spool_key", "wo_no", "batch_no", "zone", "material_group", "iso_dwg_no",
-                 "line_no", "dwg_spool_no", "iso_run_no", "paint_system", "paint_status",
-                 "Spool Status"]
+                 "line_no", "dwg_spool_no", "iso_run_no", "spool_type", "paint_system",
+                 "paint_status", "Spool Status"]
     pipe_spool_summary = df_shop.drop_duplicates(subset=["spool_key"])[
         [c for c in _pss_cols if c in df_shop.columns]
     ]
@@ -329,6 +342,7 @@ _RENAME = {
     "heat_no_1": "HEAT NO. 1", "item_2": "ITEM 2", "sch_rating_2": "SCH / RATING 2",
     "heat_no_2": "HEAT NO. 2", "joint_size": "JOINT SIZE", "welding_type": "WELDING TYPE",
     "paint_system": "PAINT SYSTEM", "paint_status": "PAINT STATUS",
+    "spool_type": "SPOOL TYPE",
     "pwht": "PWHT", "fitup_date": "FIT UP DATE",
     "fitup_inspection_date": "FIT UP INSPECTION DATE", "fu_report_no": "FU REPORT NO",
     "welding_date": "WELDING DATE", "welding_inspection_date": "WELDING INSPECTION DATE",
@@ -358,7 +372,8 @@ _RENAME = {
 _ORDER = [
     "WO NO", "ZONE", "STATUS", "WORKABLE", "BATCH NO.", "AREA", "LOCATION", "SERVICE",
     "ISO DWG NO.", "ISO RUN NO.", "REV", "TEST PACK NO", "SYSTEM NO", "SUB SYSTEM NO",
-    "TEST PRESSURE", "LINE NO.", "LINE SPEC.", "DWG SPOOL NO", "MATERIAL GROUP",
+    "TEST PRESSURE", "LINE NO.", "LINE SPEC.", "DWG SPOOL NO", "SPOOL TYPE",
+    "MATERIAL GROUP",
     "SHOP/FIELD", "JOINT NO", "JOINT SIZE", "SCH", "WPS NO", "WELDING PROCESS",
     "WELDING TYPE", "FIT UP INSPECTION DATE", "ITEM 1", "HEAT NO. 1", "ITEM 2",
     "HEAT NO. 2", "FU REPORT NO", "WELDING INSPECTION DATE", "ROOT WELDER NO",
@@ -423,7 +438,8 @@ IMPORT_MAP = {
     "ISO DWG NO.": "iso_dwg_no", "ISO RUN NO.": "iso_run_no", "REV": "rev",
     "TEST PACK NO": "test_pack_no", "SYSTEM NO": "system_no", "SUB SYSTEM NO": "subsystem_no",
     "TEST PRESSURE": "test_pressure", "LINE NO.": "line_no", "LINE SPEC.": "line_spec",
-    "DWG SPOOL NO": "dwg_spool_no", "MATERIAL GROUP": "material_group",
+    "DWG SPOOL NO": "dwg_spool_no", "SPOOL TYPE": "spool_type",
+    "MATERIAL GROUP": "material_group",
     "SHOP/FIELD": "shop_field", "JOINT NO": "joint_no", "JOINT SIZE": "joint_size",
     "SCH": "schedule", "WPS NO": "wps_no", "WELDING PROCESS": "welding_process",
     "WELDING TYPE": "welding_type", "FIT UP INSPECTION DATE": "fitup_inspection_date",
@@ -611,11 +627,10 @@ def summary_status_counts(df: pd.DataFrame) -> dict[str, int]:
 
     for _, g in d.groupby("k"):
         mat = str(g["material_group"].fillna("").iloc[0]).upper()
-        spool = str(g["dwg_spool_no"].iloc[0])
         all_f = lambda c: bool(filled(g[c]).all())
         any_f = lambda c: bool(filled(g[c]).any())
 
-        if spool.startswith("SP-SPL"):
+        if _is_straight_pipe(g):
             s = "Ready to Release"
         elif any_f("site_delivery_date"):
             s = "Sent to Site"

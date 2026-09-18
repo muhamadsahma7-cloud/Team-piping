@@ -102,6 +102,7 @@ create table if not exists public.spools (
     irn_report_no            text,
     paint_system             text,
     paint_status             text,               -- Yes | No  (needs painting?)
+    spool_type               text,               -- Straight Pipe | Fabricated Spool
     pwht                     text,
     fitup_date               text,
     welding_date             text,
@@ -268,6 +269,7 @@ alter table public.spools add column if not exists qr_id text;
 alter table public.spools add column if not exists fitup_by text;    -- fitter name
 alter table public.spools add column if not exists welding_by text;  -- welder name
 alter table public.spools add column if not exists welder_no text;   -- welder's stencil no
+alter table public.spools add column if not exists spool_type text;  -- Straight Pipe | Fabricated Spool
 drop index if exists public.uq_spools_qr_id;
 create index if not exists idx_spools_qr_id on public.spools (qr_id);
 

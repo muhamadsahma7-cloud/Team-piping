@@ -1573,6 +1573,7 @@ def page_weekly() -> None:
 
 def page_wo_summary() -> None:
     st.header("Work order summary")
+    _ensure_spool_type()
 
     wo = db.query(
         """
@@ -1843,6 +1844,19 @@ def _ensure_qr_schema() -> bool:
             db.execute(s)
         except Exception:
             pass
+    return True
+
+
+@st.cache_resource
+def _ensure_spool_type() -> bool:
+    """Idempotent DDL: spools.spool_type (Straight Pipe | Fabricated Spool),
+    distinguishing straight pipe from fabricated spool explicitly instead of
+    the old 'dwg_spool_no starts with SP-SPL' guess. Runs once per server
+    process, self-provisions on every connected project's database."""
+    try:
+        db.execute("ALTER TABLE public.spools ADD COLUMN IF NOT EXISTS spool_type text")
+    except Exception:
+        pass
     return True
 
 
@@ -2549,13 +2563,15 @@ def _distinct(col: str) -> list:
 
 def page_spools() -> None:
     st.header("Spools")
+    _ensure_spool_type()
     q = st.text_input("🔎 Search (WO / ISO / spool / joint / test pack / line)",
                       placeholder="type any part…")
-    fcol = st.columns(4)
+    fcol = st.columns(5)
     area = fcol[0].multiselect("Area", _distinct("area"))
     batch = fcol[1].multiselect("Batch no", _distinct("batch_no"))
     shop = fcol[2].selectbox("Shop/Field", ["", "S", "F"])
     status = fcol[3].selectbox("Status", ["", "issued", "os", "hold"])
+    spool_type = fcol[4].selectbox("Spool type", ["", "Straight Pipe", "Fabricated Spool"])
     g1, g2 = st.columns(2)
     only_fit = g1.checkbox("Fitted only")
     only_weld = g2.checkbox("Welded only")
@@ -2573,6 +2589,8 @@ def page_spools() -> None:
         where.append("shop_field = :shop"); params["shop"] = shop
     if status:
         where.append("status = :status"); params["status"] = status
+    if spool_type:
+        where.append("spool_type = :spool_type"); params["spool_type"] = spool_type
     if only_fit:
         where.append("coalesce(trim(fitup_date),'')<>''")
     if only_weld:
@@ -2584,7 +2602,7 @@ def page_spools() -> None:
     df = db.query(
         f"""
         SELECT id, wo_no, batch_no, iso_dwg_no, dwg_spool_no, joint_no, joint_size,
-               area, system_no, test_pack_no, shop_field, status,
+               area, system_no, test_pack_no, shop_field, status, spool_type,
                fitup_date, welding_date, paint_status, painting_date, delivery_date,
                site_delivery_date, workable
         FROM spools {clause}
@@ -2619,6 +2637,7 @@ def _classify_payload():
 
 def page_reports() -> None:
     st.header("Classify & export")
+    _ensure_spool_type()
     summary, preview, x_classified, x_master, nrows = _classify_payload()
 
     top = st.columns([4, 1])
@@ -3292,6 +3311,7 @@ def page_admin() -> None:
         st.warning("Admin only (needs the 'all' permission).")
         return
     _ensure_qr_schema()          # keep qr_id / fitup_by / welding_by in place
+    _ensure_spool_type()         # keep spool_type in place
 
     eng = db.engine()
     from sqlalchemy import text as _t
@@ -3355,6 +3375,52 @@ def page_admin() -> None:
             st.rerun()
 
     st.info("Supabase also keeps automated daily backups — dashboard → Database → Backups.")
+
+    # ---------------- spool type ----------------
+    st.divider()
+    st.subheader("Spool type")
+    st.caption("Straight Pipe or Fabricated Spool — drives Classified spools and "
+               "Work order summary. Set in bulk via the master Excel import "
+               "(`SPOOL TYPE` column) or one spool at a time here.")
+    sp_base = "FROM spools WHERE shop_field='S'"
+    sp_iso_opts = db.query(
+        f"SELECT DISTINCT iso_dwg_no {sp_base} AND coalesce(iso_dwg_no,'')<>'' ORDER BY 1",
+        ttl=0,
+    )["iso_dwg_no"].tolist()
+    sp_iso = st.selectbox("ISO DWG NO", [""] + sp_iso_opts, key="sptype_iso")
+    if sp_iso:
+        sp_line_opts = db.query(
+            f"SELECT DISTINCT line_no {sp_base} AND iso_dwg_no=:i AND coalesce(line_no,'')<>'' ORDER BY 1",
+            {"i": sp_iso}, ttl=0,
+        )["line_no"].tolist()
+        sp_line = st.selectbox("LINE NO", [""] + sp_line_opts, key="sptype_line")
+        if sp_line:
+            sp_page_opts = db.query(
+                f"SELECT DISTINCT iso_run_no {sp_base} AND iso_dwg_no=:i AND line_no=:l "
+                f"AND coalesce(iso_run_no,'')<>'' ORDER BY 1",
+                {"i": sp_iso, "l": sp_line}, ttl=0,
+            )["iso_run_no"].tolist()
+            sp_page = st.selectbox("PAGE NO (iso run no)", [""] + sp_page_opts, key="sptype_page")
+            if sp_page:
+                sp_spool_opts = db.query(
+                    f"SELECT DISTINCT dwg_spool_no {sp_base} AND iso_dwg_no=:i AND line_no=:l "
+                    f"AND iso_run_no=:p AND coalesce(dwg_spool_no,'')<>'' ORDER BY 1",
+                    {"i": sp_iso, "l": sp_line, "p": sp_page}, ttl=0,
+                )["dwg_spool_no"].tolist()
+                sp_spool = st.selectbox("DWG SPOOL NO", [""] + sp_spool_opts, key="sptype_spool")
+                if sp_spool:
+                    sp_choice = st.radio("Set as", ["Straight Pipe", "Fabricated Spool"],
+                                          horizontal=True, key="sptype_choice")
+                    if st.button("Apply to this spool", type="primary", key="sptype_apply"):
+                        db.execute(
+                            "UPDATE spools SET spool_type=:t WHERE iso_dwg_no=:i AND line_no=:l "
+                            "AND iso_run_no=:p AND dwg_spool_no=:s",
+                            {"t": sp_choice, "i": sp_iso, "l": sp_line, "p": sp_page, "s": sp_spool},
+                        )
+                        st.cache_data.clear()
+                        _classify_payload.clear()
+                        st.success(f"Set {sp_spool} to {sp_choice}.")
+                        st.rerun()
 
     # ---------------- import ----------------
     st.divider()
