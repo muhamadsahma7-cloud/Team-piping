@@ -2865,7 +2865,8 @@ def _ensure_bom_wo_no() -> bool:
     return True
 
 
-_CONCERN_CATEGORIES = ["Material", "Manpower", "Equipment", "Quality", "Schedule", "Other"]
+_CONCERN_CATEGORIES = ["Material", "Manpower", "Equipment", "Quality", "Schedule",
+                       "ISO Drawing", "Other"]
 
 
 @st.cache_resource
