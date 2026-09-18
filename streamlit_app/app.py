@@ -1346,6 +1346,7 @@ SELECT
 
 def page_weekly() -> None:
     st.header("🗓️ Weekly report")
+    _ensure_daily_concerns()
 
     cfg = db.get_settings()
     today = date.today()
@@ -1544,6 +1545,24 @@ def page_weekly() -> None:
                 st.dataframe(df_g, use_container_width=True, hide_index=True,
                             column_config=num2_cfg(df_g))
 
+    # ---- areas of concern this week ---------------------------------------
+    st.subheader("Areas of concern this week")
+    concern_df = db.query(
+        """SELECT date AS "Date", category AS "Category", note AS "Concern",
+                  coalesce(raised_by,'') AS "Raised by"
+             FROM daily_concerns WHERE date BETWEEN :s AND :e
+            ORDER BY date, category""",
+        {"s": s, "e": e}, ttl=30,
+    )
+    if concern_df.empty:
+        st.caption("No concerns logged this week.")
+    else:
+        st.dataframe(concern_df, use_container_width=True, hide_index=True)
+        by_cat = (concern_df["Category"].value_counts()
+                  .rename_axis("Category").reset_index(name="Count"))
+        st.caption("By category: " + ", ".join(
+            f"{r['Category']} ({r['Count']})" for _, r in by_cat.iterrows()))
+
     st.divider()
     key_rows = [
         ("Fit-up (dia-inch)", f"{kf['fitup_di']:,.2f}"),
@@ -1554,6 +1573,7 @@ def page_weekly() -> None:
         ("Delivered to site (dia-inch)", f"{kf['site_di']:,.2f}"),
         ("Fitter man-days", f"{int(kf['fitter_days']):,}"),
         ("Welder man-days", f"{int(kf['welder_days']):,}"),
+        ("Concerns logged", f"{len(concern_df):,}"),
     ]
     if plan_row is not None:
         r0 = plan_row.iloc[0]
@@ -1564,7 +1584,8 @@ def page_weekly() -> None:
         ]
     st.download_button(
         "⬇ Weekly report (.xlsx)",
-        data=reports.build_weekly_report_xlsx(label, key_rows, dv, wo_df, batch_df, area_df),
+        data=reports.build_weekly_report_xlsx(label, key_rows, dv, wo_df, batch_df, area_df,
+                                              concern_df),
         file_name=f"weekly_report_{wk_start.isoformat()}_{reports.stamp()}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary",
@@ -2844,6 +2865,30 @@ def _ensure_bom_wo_no() -> bool:
     return True
 
 
+_CONCERN_CATEGORIES = ["Material", "Manpower", "Equipment", "Quality", "Schedule", "Other"]
+
+
+@st.cache_resource
+def _ensure_daily_concerns() -> bool:
+    """Idempotent DDL: daily_concerns (site issues/blockers logged per day,
+    several per day allowed, compiled into the Weekly report). Runs once
+    per server process, self-provisions on every connected project's
+    database."""
+    stmts = [
+        """CREATE TABLE IF NOT EXISTS public.daily_concerns (
+             id bigint generated always as identity primary key,
+             date text not null, category text not null, note text not null,
+             raised_by text, created_at timestamptz not null default now())""",
+        "CREATE INDEX IF NOT EXISTS idx_daily_concerns_date ON public.daily_concerns (date)",
+    ]
+    for s in stmts:
+        try:
+            db.execute(s)
+        except Exception:
+            pass
+    return True
+
+
 def _upsert_bom(df: pd.DataFrame) -> tuple[int, int]:
     """For each row: update the matching BOM line (by ISO drawing + WO no +
     item code + material + size + sch/rating) to the file's quantity/
@@ -3498,6 +3543,7 @@ def page_admin() -> None:
 
 def page_manpower() -> None:
     st.header("Manpower reports")
+    _ensure_daily_concerns()
     perm = st.session_state.get("permission", "")
     can_edit = perm == "all" or "Manpower Report" in perm
 
@@ -3546,6 +3592,55 @@ def page_manpower() -> None:
             st.cache_data.clear()
             st.success(f"Deleted {target}.")
             st.rerun()
+
+    st.divider()
+    st.subheader("Daily concerns")
+    st.caption("Site issues / blockers logged per day — compiled into the Weekly report.")
+
+    if can_edit:
+        with st.form("concern", clear_on_submit=True):
+            cc = st.columns([1, 1, 3])
+            cdate = cc[0].date_input("Date", value=date.today(), format="YYYY-MM-DD",
+                                     key="concern_date")
+            ccat = cc[1].selectbox("Category", _CONCERN_CATEGORIES, key="concern_cat")
+            cnote = cc[2].text_area("Concern", key="concern_note", height=68)
+            cadd = st.form_submit_button("Add concern", type="primary")
+        if cadd:
+            if not cnote.strip():
+                st.warning("Enter a concern.")
+            else:
+                db.execute(
+                    """INSERT INTO daily_concerns (date, category, note, raised_by)
+                       VALUES (:d, :c, :n, :u)""",
+                    {"d": cdate.isoformat(), "c": ccat, "n": cnote.strip(),
+                     "u": st.session_state.get("user")},
+                )
+                st.cache_data.clear()
+                st.success(f"Logged a {ccat.lower()} concern for {cdate.isoformat()}.")
+                st.rerun()
+    else:
+        st.caption("View only — needs the 'Manpower Report' permission to edit.")
+
+    cdf = db.query(
+        """SELECT id, date, category, note, coalesce(raised_by,'') AS "raised by"
+             FROM daily_concerns ORDER BY date DESC, id DESC""",
+        ttl=0,
+    )
+    if cdf.empty:
+        st.caption("No concerns logged yet.")
+    else:
+        st.dataframe(cdf.drop(columns=["id"]), use_container_width=True, hide_index=True)
+        if can_edit:
+            c1, c2 = st.columns([3, 1])
+            labels = [f"{r['date']} · {r['category']} · {r['note'][:40]}"
+                     for _, r in cdf.iterrows()]
+            pick = c1.selectbox("Delete a concern", labels, key="concern_del_pick")
+            if c2.button("🗑 Delete", key="concern_del_btn", disabled=not labels):
+                target_id = int(cdf.iloc[labels.index(pick)]["id"])
+                db.execute("DELETE FROM daily_concerns WHERE id = :i", {"i": target_id})
+                st.cache_data.clear()
+                st.success("Deleted.")
+                st.rerun()
 
 
 {

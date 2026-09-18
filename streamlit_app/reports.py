@@ -298,8 +298,10 @@ def build_weekly_report_xlsx(
     wo: pd.DataFrame,
     batch: pd.DataFrame,
     area: pd.DataFrame,
+    concerns: pd.DataFrame | None = None,
 ) -> bytes:
-    """Weekly report workbook: Key figures + Daily + By work order/batch/area."""
+    """Weekly report workbook: Key figures + Daily + By work order/batch/area
+    + Areas of concern."""
     from openpyxl import Workbook
 
     gen = f"Generated {datetime.now(MYT):%Y-%m-%d %H:%M} MYT"
@@ -319,7 +321,8 @@ def build_weekly_report_xlsx(
 
     idx = 1
     for sheet, dfr in (("Daily", daily), ("By work order", wo),
-                       ("By batch", batch), ("By area", area)):
+                       ("By batch", batch), ("By area", area),
+                       ("Areas of concern", concerns)):
         if dfr is not None and not dfr.empty:
             _write_report_sheet(wb, sheet, f"{sheet.upper()}  —  {label}", gen, dfr, index=idx)
             idx += 1

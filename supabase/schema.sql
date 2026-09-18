@@ -153,6 +153,20 @@ create table if not exists public.manpower_reports (
 );
 
 -- =====================================================================
+-- daily_concerns  (site issues / blockers logged per day, several per
+-- day allowed; compiled into the Weekly report)
+-- =====================================================================
+create table if not exists public.daily_concerns (
+    id           bigint generated always as identity primary key,
+    date         text not null,        -- 'YYYY-MM-DD'
+    category     text not null,        -- Material | Manpower | Equipment | Quality | Schedule | Other
+    note         text not null,
+    raised_by    text,
+    created_at   timestamptz not null default now()
+);
+create index if not exists idx_daily_concerns_date on public.daily_concerns (date);
+
+-- =====================================================================
 -- bom  (bill of materials, from material_tracking.db)
 -- =====================================================================
 create table if not exists public.bom (
@@ -324,6 +338,7 @@ create index if not exists idx_field_updates_qr
 -- =====================================================================
 alter table public.spools            enable row level security;
 alter table public.manpower_reports  enable row level security;
+alter table public.daily_concerns    enable row level security;
 alter table public.bom               enable row level security;
 alter table public.inventory         enable row level security;
 alter table public.user_credentials  enable row level security;
