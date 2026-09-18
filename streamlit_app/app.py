@@ -1346,7 +1346,7 @@ SELECT
 
 def page_weekly() -> None:
     st.header("🗓️ Weekly report")
-    _ensure_daily_concerns()
+    _ensure_daily_concerns(db._conn_name())
 
     cfg = db.get_settings()
     today = date.today()
@@ -1594,7 +1594,7 @@ def page_weekly() -> None:
 
 def page_wo_summary() -> None:
     st.header("Work order summary")
-    _ensure_spool_type()
+    _ensure_spool_type(db._conn_name())
 
     wo = db.query(
         """
@@ -1829,9 +1829,12 @@ def page_update() -> None:
 #     field_updates make a repeat a no-op ("cannot double entry").
 # =====================================================================
 @st.cache_resource
-def _ensure_qr_schema() -> bool:
+def _ensure_qr_schema(conn_name: str) -> bool:
     """Idempotent DDL so the QR feature works even if supabase/qr_feature.sql
-    wasn't (re-)run. Runs once per server process. Safe to fail silently."""
+    wasn't (re-)run. Runs once per connected project (conn_name is part of
+    the cache key, else a multi-project deployment only ever provisions
+    whichever database happened to be connected first). Safe to fail
+    silently."""
     stmts = [
         "ALTER TABLE public.spools ADD COLUMN IF NOT EXISTS qr_id text",
         "ALTER TABLE public.spools ADD COLUMN IF NOT EXISTS fitup_by text",
@@ -1869,11 +1872,13 @@ def _ensure_qr_schema() -> bool:
 
 
 @st.cache_resource
-def _ensure_spool_type() -> bool:
+def _ensure_spool_type(conn_name: str) -> bool:
     """Idempotent DDL: spools.spool_type (Straight Pipe | Fabricated Spool),
     distinguishing straight pipe from fabricated spool explicitly instead of
-    the old 'dwg_spool_no starts with SP-SPL' guess. Runs once per server
-    process, self-provisions on every connected project's database."""
+    the old 'dwg_spool_no starts with SP-SPL' guess. Runs once per connected
+    project (conn_name is part of the cache key, else a multi-project
+    deployment only ever provisions whichever database happened to be
+    connected first)."""
     try:
         db.execute("ALTER TABLE public.spools ADD COLUMN IF NOT EXISTS spool_type text")
     except Exception:
@@ -1957,7 +1962,7 @@ def _scan_history(code: str) -> None:
 
 def page_scan() -> None:
     st.header("📲 Scan & update")
-    _ensure_qr_schema()
+    _ensure_qr_schema(db._conn_name())
 
     code = (st.query_params.get("scan")
             or st.session_state.get("pending_scan") or "").strip()
@@ -2194,7 +2199,7 @@ def page_scan() -> None:
 
 def page_field_workers() -> None:
     st.header("🦺 Field workers")
-    _ensure_qr_schema()
+    _ensure_qr_schema(db._conn_name())
     st.caption("The shop-floor roster. Fitters and welders can also self-register "
                "from the Scan & update screen; the name + PIN signs every scan.")
     is_admin = st.session_state.get("permission", "") == "all"
@@ -2253,7 +2258,7 @@ _SPOOL_KEY = ("iso_dwg_no", "line_no", "iso_run_no", "dwg_spool_no")
 
 def page_qr_labels() -> None:
     st.header("🏷️ QR labels")
-    _ensure_qr_schema()
+    _ensure_qr_schema(db._conn_name())
     st.caption("One QR per spool (ISO dwg · line · page · dwg spool). The label "
                "also prints WO / batch / material. Scanning it lists every joint "
                "on that spool to update.")
@@ -2584,7 +2589,7 @@ def _distinct(col: str) -> list:
 
 def page_spools() -> None:
     st.header("Spools")
-    _ensure_spool_type()
+    _ensure_spool_type(db._conn_name())
     q = st.text_input("🔎 Search (WO / ISO / spool / joint / test pack / line)",
                       placeholder="type any part…")
     fcol = st.columns(5)
@@ -2658,7 +2663,7 @@ def _classify_payload():
 
 def page_reports() -> None:
     st.header("Classify & export")
-    _ensure_spool_type()
+    _ensure_spool_type(db._conn_name())
     summary, preview, x_classified, x_master, nrows = _classify_payload()
 
     top = st.columns([4, 1])
@@ -2854,9 +2859,11 @@ def _upsert_inventory(df: pd.DataFrame) -> tuple[int, int]:
 
 
 @st.cache_resource
-def _ensure_bom_wo_no() -> bool:
+def _ensure_bom_wo_no(conn_name: str) -> bool:
     """Idempotent DDL: bom.wo_no, added later than the rest of bom. Runs
-    once per server process."""
+    once per connected project (conn_name is part of the cache key, else a
+    multi-project deployment only ever provisions whichever database
+    happened to be connected first)."""
     try:
         db.execute("ALTER TABLE public.bom ADD COLUMN IF NOT EXISTS wo_no text")
         db.execute("CREATE INDEX IF NOT EXISTS idx_bom_wo_no ON public.bom (wo_no)")
@@ -2870,11 +2877,12 @@ _CONCERN_CATEGORIES = ["Material", "Manpower", "Equipment", "Quality", "Schedule
 
 
 @st.cache_resource
-def _ensure_daily_concerns() -> bool:
+def _ensure_daily_concerns(conn_name: str) -> bool:
     """Idempotent DDL: daily_concerns (site issues/blockers logged per day,
     several per day allowed, compiled into the Weekly report). Runs once
-    per server process, self-provisions on every connected project's
-    database."""
+    per connected project (conn_name is part of the cache key, else a
+    multi-project deployment only ever provisions whichever database
+    happened to be connected first)."""
     stmts = [
         """CREATE TABLE IF NOT EXISTS public.daily_concerns (
              id bigint generated always as identity primary key,
@@ -3005,7 +3013,7 @@ def _material_import_ui(*, table: str, template_fn, parse_fn, upsert_fn,
 
 def page_inventory() -> None:
     st.header("Inventory")
-    _ensure_bom_wo_no()
+    _ensure_bom_wo_no(db._conn_name())
     t_bom, t_stock, t_short = st.tabs(
         ["📋 Bill of materials", "📦 Stock", "⚠️ BOM vs inventory shortage"])
 
@@ -3356,8 +3364,8 @@ def page_admin() -> None:
     if st.session_state.get("permission") != "all":
         st.warning("Admin only (needs the 'all' permission).")
         return
-    _ensure_qr_schema()          # keep qr_id / fitup_by / welding_by in place
-    _ensure_spool_type()         # keep spool_type in place
+    _ensure_qr_schema(db._conn_name())          # keep qr_id / fitup_by / welding_by in place
+    _ensure_spool_type(db._conn_name())         # keep spool_type in place
 
     eng = db.engine()
     from sqlalchemy import text as _t
@@ -3544,7 +3552,7 @@ def page_admin() -> None:
 
 def page_manpower() -> None:
     st.header("Manpower reports")
-    _ensure_daily_concerns()
+    _ensure_daily_concerns(db._conn_name())
     perm = st.session_state.get("permission", "")
     can_edit = perm == "all" or "Manpower Report" in perm
 
