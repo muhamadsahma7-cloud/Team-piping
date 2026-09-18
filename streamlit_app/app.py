@@ -3536,7 +3536,7 @@ def page_manpower() -> None:
     if not df.empty:
         chart = df.copy()
         chart["date"] = pd.to_datetime(chart["date"], errors="coerce")
-        st.line_chart(chart.set_index("date")[["total_welders", "total_fitters"]])
+        st.bar_chart(chart.set_index("date")[["total_welders", "total_fitters"]])
 
     if can_edit and not df.empty:
         c1, c2 = st.columns([3, 1])
