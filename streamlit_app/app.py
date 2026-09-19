@@ -716,11 +716,14 @@ sp AS (
     GROUP BY iso_dwg_no, line_no, iso_run_no, dwg_spool_no
 ),
 sp_issued AS (
-    -- same as sp, but only spools whose work order has been issued
-    -- (mirrors wo_issued below) -- for the "straight pipe ready to
+    -- same as sp, plus an is_issued flag, for the "straight pipe ready to
     -- deliver" key figures. No shop_field filter: straight pipe can be
     -- field-installed and still needs release tracking, same exception
-    -- reports.classify()/summarize() already make for it.
+    -- reports.classify()/summarize() already make for it. Every aggregate
+    -- (incl. is_straight) is computed over ALL of a spool's rows first,
+    -- same as classify() - filtering rows to issued/workable BEFORE
+    -- aggregating would let a delivered/painted row outside that filter
+    -- go unseen and wrongly count the spool as still "ready".
     SELECT bool_or(coalesce(site_delivery_date ~ '{_ISO}'
              AND substr(site_delivery_date,1,10) <= :asof, false))        AS delivered,
            bool_or(coalesce(delivery_date ~ '{_ISO}'
@@ -729,10 +732,10 @@ sp_issued AS (
            coalesce(
              upper(trim(max(nullif(trim(spool_type), '')))) LIKE 'STRAIGHT%',
              bool_and(dwg_spool_no LIKE 'SP-SPL%')
-           )                                                              AS is_straight
+           )                                                              AS is_straight,
+           bool_or(lower(coalesce(status,''))='issued'
+             AND upper(trim(coalesce(workable,'')))='Y')                  AS is_issued
     FROM spools
-    WHERE lower(coalesce(status,''))='issued'
-      AND upper(trim(coalesce(workable,'')))='Y'
     GROUP BY iso_dwg_no, line_no, iso_run_no, dwg_spool_no
 )
 SELECT
@@ -743,9 +746,11 @@ SELECT
   (SELECT count(*) FROM sp WHERE welded AND NOT irn_done AND needs_paint)      AS wait_irn_paint,
   (SELECT count(*) FROM sp WHERE welded AND NOT irn_done AND NOT needs_paint)  AS wait_irn_site,
   (SELECT count(*) FROM sp_issued
-     WHERE is_straight AND NOT delivered AND NOT to_paint AND needs_paint)     AS straight_ready_paint,
+     WHERE is_straight AND is_issued AND NOT delivered AND NOT to_paint
+       AND needs_paint)                                                       AS straight_ready_paint,
   (SELECT count(*) FROM sp_issued
-     WHERE is_straight AND NOT delivered AND NOT to_paint AND NOT needs_paint) AS straight_ready_nonpaint,
+     WHERE is_straight AND is_issued AND NOT delivered AND NOT to_paint
+       AND NOT needs_paint)                                                   AS straight_ready_nonpaint,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S')                       AS shop_di,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='F')                       AS field_di,
   (SELECT count(DISTINCT wo_no) FROM spools
