@@ -1045,7 +1045,8 @@ def page_overview() -> None:
     st.subheader("Breakdown")
     st.caption("Shop spools only · `spool_done` = every joint welded by the as-of date "
                "(ties to *Total completed spools* above).")
-    t1, t2, t3 = st.tabs(["By work order", "By batch no", "By area"])
+    t1, t2, t3, t4, t5 = st.tabs(
+        ["By work order", "By batch no", "By area", "By size", "By material"])
     with t1:
         show_table(breakdown("wo_no"), "progress_by_wo",
                    progress=("fitup_%", "welding_%"), money=_mny)
@@ -1054,6 +1055,12 @@ def page_overview() -> None:
                    progress=("fitup_%", "welding_%"), money=_mny)
     with t3:
         show_table(breakdown("area"), "progress_by_area",
+                   progress=("fitup_%", "welding_%"), money=_mny)
+    with t4:
+        show_table(breakdown("joint_size"), "progress_by_size",
+                   progress=("fitup_%", "welding_%"), money=_mny)
+    with t5:
+        show_table(breakdown("material_group"), "progress_by_material",
                    progress=("fitup_%", "welding_%"), money=_mny)
 
 
