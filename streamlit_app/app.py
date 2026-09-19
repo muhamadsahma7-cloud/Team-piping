@@ -718,7 +718,9 @@ sp AS (
 sp_issued AS (
     -- same as sp, but only spools whose work order has been issued
     -- (mirrors wo_issued below) -- for the "straight pipe ready to
-    -- deliver" key figures.
+    -- deliver" key figures. No shop_field filter: straight pipe can be
+    -- field-installed and still needs release tracking, same exception
+    -- reports.classify()/summarize() already make for it.
     SELECT bool_or(coalesce(site_delivery_date ~ '{_ISO}'
              AND substr(site_delivery_date,1,10) <= :asof, false))        AS delivered,
            bool_or(coalesce(delivery_date ~ '{_ISO}'
@@ -729,7 +731,7 @@ sp_issued AS (
              bool_and(dwg_spool_no LIKE 'SP-SPL%')
            )                                                              AS is_straight
     FROM spools
-    WHERE shop_field='S' AND lower(coalesce(status,''))='issued'
+    WHERE lower(coalesce(status,''))='issued'
       AND upper(trim(coalesce(workable,'')))='Y'
     GROUP BY iso_dwg_no, line_no, iso_run_no, dwg_spool_no
 )
