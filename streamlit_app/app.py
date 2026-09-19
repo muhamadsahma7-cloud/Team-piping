@@ -723,11 +723,13 @@ sp_issued AS (
     -- (incl. is_straight) is computed over ALL of a spool's rows first,
     -- same as classify() - filtering rows to issued/workable BEFORE
     -- aggregating would let a delivered/painted row outside that filter
-    -- go unseen and wrongly count the spool as still "ready".
-    SELECT bool_or(coalesce(site_delivery_date ~ '{_ISO}'
-             AND substr(site_delivery_date,1,10) <= :asof, false))        AS delivered,
-           bool_or(coalesce(delivery_date ~ '{_ISO}'
-             AND substr(delivery_date,1,10) <= :asof, false))             AS to_paint,
+    -- go unseen and wrongly count the spool as still "ready". delivered/
+    -- to_paint match classify() exactly (any non-blank date, no ISO-format
+    -- or as-of gating) rather than sp's asof-aware version, so this figure
+    -- always agrees with Classify & export regardless of the As of date
+    -- picker or a non-ISO date value.
+    SELECT bool_or(coalesce(trim(site_delivery_date), '') <> '')          AS delivered,
+           bool_or(coalesce(trim(delivery_date), '') <> '')               AS to_paint,
            bool_or(upper(trim(coalesce(paint_status,''))) = 'YES')        AS needs_paint,
            coalesce(
              upper(trim(max(nullif(trim(spool_type), '')))) LIKE 'STRAIGHT%',
