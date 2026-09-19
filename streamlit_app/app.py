@@ -738,7 +738,9 @@ sp_issued AS (
            bool_or(lower(coalesce(status,''))='issued'
              AND upper(trim(coalesce(workable,'')))='Y')                  AS is_issued
     FROM spools
-    GROUP BY iso_dwg_no, line_no, iso_run_no, dwg_spool_no
+    -- trimmed, like classify()'s spool_key, so stray whitespace on one
+    -- joint's row doesn't split one physical spool into two groups here
+    GROUP BY trim(iso_dwg_no), trim(line_no), trim(iso_run_no), trim(dwg_spool_no)
 )
 SELECT
   (SELECT count(*) FROM sp)                          AS total_spools,
