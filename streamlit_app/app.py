@@ -714,6 +714,24 @@ sp AS (
     FROM spools
     WHERE shop_field='S'
     GROUP BY iso_dwg_no, line_no, iso_run_no, dwg_spool_no
+),
+sp_issued AS (
+    -- same as sp, but only spools whose work order has been issued
+    -- (mirrors wo_issued below) -- for the "straight pipe ready to
+    -- deliver" key figures.
+    SELECT bool_or(coalesce(site_delivery_date ~ '{_ISO}'
+             AND substr(site_delivery_date,1,10) <= :asof, false))        AS delivered,
+           bool_or(coalesce(delivery_date ~ '{_ISO}'
+             AND substr(delivery_date,1,10) <= :asof, false))             AS to_paint,
+           bool_or(upper(trim(coalesce(paint_status,''))) = 'YES')        AS needs_paint,
+           coalesce(
+             upper(trim(max(nullif(trim(spool_type), '')))) LIKE 'STRAIGHT%',
+             bool_and(dwg_spool_no LIKE 'SP-SPL%')
+           )                                                              AS is_straight
+    FROM spools
+    WHERE shop_field='S' AND lower(coalesce(status,''))='issued'
+      AND upper(trim(coalesce(workable,'')))='Y'
+    GROUP BY iso_dwg_no, line_no, iso_run_no, dwg_spool_no
 )
 SELECT
   (SELECT count(*) FROM sp)                          AS total_spools,
@@ -722,9 +740,9 @@ SELECT
   (SELECT count(*) FROM sp WHERE to_paint)           AS painting_spools,
   (SELECT count(*) FROM sp WHERE welded AND NOT irn_done AND needs_paint)      AS wait_irn_paint,
   (SELECT count(*) FROM sp WHERE welded AND NOT irn_done AND NOT needs_paint)  AS wait_irn_site,
-  (SELECT count(*) FROM sp
+  (SELECT count(*) FROM sp_issued
      WHERE is_straight AND NOT delivered AND NOT to_paint AND needs_paint)     AS straight_ready_paint,
-  (SELECT count(*) FROM sp
+  (SELECT count(*) FROM sp_issued
      WHERE is_straight AND NOT delivered AND NOT to_paint AND NOT needs_paint) AS straight_ready_nonpaint,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S')                       AS shop_di,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='F')                       AS field_di,
@@ -861,12 +879,12 @@ def page_overview() -> None:
     c_ = st.columns(3)
     c_[0].metric("Straight pipe ready to deliver — painting", f"{srp:,}", pct(srp),
                 delta_color="off", border=True,
-                help="Straight pipe (Spool type), needs painting, not yet sent to "
-                     "painting or site.")
+                help="Straight pipe (Spool type) on an issued work order, needs "
+                     "painting, not yet sent to painting or site.")
     c_[1].metric("Straight pipe ready to deliver — non-painting", f"{srn:,}", pct(srn),
                 delta_color="off", border=True,
-                help="Straight pipe (Spool type), no painting required, not yet "
-                     "sent to painting or site.")
+                help="Straight pipe (Spool type) on an issued work order, no "
+                     "painting required, not yet sent to painting or site.")
 
     st.subheader("Cumulative S-curve (shop dia-inch)")
     sc = db.query(
