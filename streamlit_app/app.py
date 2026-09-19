@@ -992,7 +992,6 @@ def page_overview() -> None:
         keys = [f"coalesce(nullif(trim({c}::text),''),'(blank)')" for c in cols]
         select_keys = ", ".join(f'{k} AS "{lab}"' for k, lab in zip(keys, labs))
         group_nums = ", ".join(str(i + 1) for i in range(len(cols)))
-        quoted_labs = [f'"{lab}"' for lab in labs]
         d = db.query(
             f"""
             SELECT {select_keys},
@@ -1008,27 +1007,8 @@ def page_overview() -> None:
             """,
             {"asof": asof.isoformat()}, ttl=30,
         )
-        sp = db.query(
-            f"""
-            WITH s AS (
-                SELECT {select_keys},
-                       bool_and(coalesce(welding_date ~ '{_ISO}'
-                         AND substr(welding_date,1,10) <= :asof, false)) AS welded
-                FROM spools
-                WHERE shop_field='S'
-                GROUP BY {", ".join(quoted_labs)}, iso_dwg_no, line_no, iso_run_no, dwg_spool_no
-            )
-            SELECT {", ".join(quoted_labs)}, count(*) AS spools,
-                   count(*) FILTER (WHERE welded) AS spool_done
-            FROM s GROUP BY {group_nums}
-            """,
-            {"asof": asof.isoformat()}, ttl=30,
-        )
-        d = d.merge(sp, on=list(labs), how="left")
         for cc in ("joints", "dia_inch", "fitup_di", "welding_di"):
             d[cc] = d[cc].astype(float)
-        for cc in ("spools", "spool_done"):
-            d[cc] = d[cc].fillna(0).astype(int)
         di = d["dia_inch"].where(d["dia_inch"] > 0)
         d["fitup_bal"] = (d["dia_inch"] - d["fitup_di"]).round(2)
         d["welding_bal"] = (d["dia_inch"] - d["welding_di"]).round(2)
@@ -1042,14 +1022,13 @@ def page_overview() -> None:
                                                           "fitup_%"].clip(upper=99)
         d.loc[d["welding_bal"] > 0.005, "welding_%"] = d.loc[d["welding_bal"] > 0.005,
                                                               "welding_%"].clip(upper=99)
-        return d[list(labs) + ["spools", "spool_done", "joints", "dia_inch",
+        return d[list(labs) + ["joints", "dia_inch",
                                "fitup_di", "fitup_bal", "fitup_%",
                                "welding_di", "welding_bal", "welding_%"]]
 
     _mny = ("dia_inch", "fitup_di", "fitup_bal", "welding_di", "welding_bal")
     st.subheader("Breakdown")
-    st.caption("Shop spools only · `spool_done` = every joint welded by the as-of date "
-               "(ties to *Total completed spools* above).")
+    st.caption("Shop spools only.")
     t1, t2, t3, t4 = st.tabs(
         ["By work order", "By batch no", "By area", "By size & material"])
     with t1:
