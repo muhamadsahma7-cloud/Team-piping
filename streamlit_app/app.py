@@ -703,14 +703,7 @@ sp AS (
              AND substr(irn_date,1,10) <= :asof, false))                  AS irn_done,
            bool_or(coalesce(delivery_date ~ '{_ISO}'
              AND substr(delivery_date,1,10) <= :asof, false))             AS to_paint,
-           bool_or(upper(trim(coalesce(paint_status,''))) = 'YES')        AS needs_paint,
-           -- explicit spool_type wins; blank falls back to the legacy
-           -- 'DWG SPOOL NO starts with SP-SPL' guess (mirrors
-           -- reports._is_straight_pipe)
-           coalesce(
-             upper(trim(max(nullif(trim(spool_type), '')))) LIKE 'STRAIGHT%',
-             bool_and(dwg_spool_no LIKE 'SP-SPL%')
-           )                                                              AS is_straight
+           bool_or(upper(trim(coalesce(paint_status,''))) = 'YES')        AS needs_paint
     FROM spools
     WHERE shop_field='S'
     GROUP BY iso_dwg_no, line_no, iso_run_no, dwg_spool_no
@@ -731,8 +724,18 @@ sp_issued AS (
     SELECT bool_or(coalesce(trim(site_delivery_date), '') <> '')          AS delivered,
            bool_or(coalesce(trim(delivery_date), '') <> '')               AS to_paint,
            bool_or(upper(trim(coalesce(paint_status,''))) = 'YES')        AS needs_paint,
+           -- explicit spool_type wins, taking the FIRST non-blank value
+           -- in id order when a spool's joints disagree (matches
+           -- classify()'s vals.iloc[0] on an unordered SELECT * - not
+           -- max(), which would pick 'Straight Pipe' over 'Fabricated
+           -- Spool' purely because S > F alphabetically); blank
+           -- altogether falls back to the legacy 'DWG SPOOL NO starts
+           -- with SP-SPL' guess.
            coalesce(
-             upper(trim(max(nullif(trim(spool_type), '')))) LIKE 'STRAIGHT%',
+             upper(trim(
+               (array_agg(nullif(trim(spool_type), '') ORDER BY id)
+                  FILTER (WHERE nullif(trim(spool_type), '') IS NOT NULL))[1]
+             )) LIKE 'STRAIGHT%',
              bool_and(dwg_spool_no LIKE 'SP-SPL%')
            )                                                              AS is_straight,
            bool_or(lower(coalesce(status,''))='issued'
