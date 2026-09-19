@@ -665,6 +665,14 @@ if not can_see(page, st.session_state.get("permission", "")):
 # ':asof' = view the project as it stood at end of that day (YYYY-MM-DD text).
 # All date columns are clean ISO strings, so substr(d,1,10) <= :asof is a safe compare.
 _ISO = "^[0-9]{4}-[0-9]{2}-[0-9]{2}"
+
+# Straight pipe (Spool type) doesn't need fit-up/welding dates to be ready
+# to release. Explicit spool_type wins; blank falls back to the legacy
+# 'DWG SPOOL NO starts with SP-SPL' guess (mirrors reports._is_straight_pipe).
+_IS_STRAIGHT_SQL = (
+    "coalesce(upper(trim(spool_type)) LIKE 'STRAIGHT%', dwg_spool_no LIKE 'SP-SPL%')"
+)
+
 _STATS_SQL = f"""
 WITH wo AS (
     SELECT joint_size,
@@ -1620,12 +1628,16 @@ def page_wo_summary() -> None:
     _ensure_spool_type(db._conn_name())
 
     wo = db.query(
-        """
+        f"""
         SELECT coalesce(nullif(trim(wo_no),''),'(blank)') AS "WO No",
                coalesce(material_group,'')                AS "Material Group",
                round(coalesce(sum(joint_size),0),2)       AS "Total Dia Inch",
-               round(coalesce(sum(joint_size) FILTER (WHERE coalesce(trim(fitup_date),'')=''),0),2)   AS "Balance Fit-Up",
-               round(coalesce(sum(joint_size) FILTER (WHERE coalesce(trim(welding_date),'')=''),0),2) AS "Balance Welding"
+               round(coalesce(sum(joint_size) FILTER (
+                   WHERE coalesce(trim(fitup_date),'')='' AND NOT ({_IS_STRAIGHT_SQL})
+               ),0),2)                                    AS "Balance Fit-Up",
+               round(coalesce(sum(joint_size) FILTER (
+                   WHERE coalesce(trim(welding_date),'')='' AND NOT ({_IS_STRAIGHT_SQL})
+               ),0),2)                                    AS "Balance Welding"
         FROM spools
         WHERE shop_field='S' AND lower(coalesce(status,''))='issued'
         GROUP BY 1, 2
