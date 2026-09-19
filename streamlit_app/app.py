@@ -781,6 +781,7 @@ SELECT
 
 def page_overview() -> None:
     st.header("Project dashboard")
+    _ensure_spool_type(db._conn_name())
 
     rng = db.query(
         f"""SELECT
