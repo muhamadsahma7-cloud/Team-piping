@@ -517,7 +517,7 @@ welcome_splash()
 # user_credentials is a comma-separated list of these (or the literal 'all').
 KNOWN_TOKENS = [
     "all", "Spools", "Project Summary", "Targets", "Update Fit-Up", "Update Welding",
-    "Painting Delivery", "Site Delivery", "Generate Reports", "Inventory",
+    "Update IRN", "Painting Delivery", "Site Delivery", "Generate Reports", "Inventory",
     "Manpower Report", "QC WCS", "Field Scan",
 ]
 ADMIN = "__admin__"   # page tokens that only 'all' can satisfy
@@ -529,7 +529,7 @@ PAGE_PERMS = {
     "Targets & plan": ["Targets"],
     "Work order summary": [],
     "Weekly report": [],
-    "Update progress": ["Update Fit-Up", "Update Welding"],
+    "Update progress": ["Update Fit-Up", "Update Welding", "Update IRN"],
     "Scan & update": ["Field Scan", "Update Fit-Up", "Update Welding"],
     "Field workers": [ADMIN],
     "QR labels": [ADMIN],
@@ -1782,11 +1782,14 @@ def page_update() -> None:
         modes.append("Fit-Up date")
     if perm == "all" or "Update Welding" in perm:
         modes.append("Welding date")
+    if perm == "all" or "Update IRN" in perm:
+        modes.append("IRN")
     if not modes:
         st.warning("Your account has no update permission "
-                   "(needs 'Update Fit-Up' or 'Update Welding').")
+                   "(needs 'Update Fit-Up', 'Update Welding', or 'Update IRN').")
         return
     mode = st.radio("What to update", modes, horizontal=True)
+    is_irn = mode == "IRN"
     col = "fitup_date" if mode == "Fit-Up date" else "welding_date"
 
     base = "FROM spools WHERE shop_field='S'"
@@ -1851,8 +1854,10 @@ def page_update() -> None:
 
     joints = db.query(
         f"""SELECT joint_no, joint_size, item_1, sch_rating_1, item_2, sch_rating_2,
-                   coalesce(fitup_date,'')   AS fitup_date,
-                   coalesce(welding_date,'') AS welding_date
+                   coalesce(fitup_date,'')     AS fitup_date,
+                   coalesce(welding_date,'')   AS welding_date,
+                   coalesce(irn_date,'')       AS irn_date,
+                   coalesce(irn_report_no,'')  AS irn_report_no
             {base} AND iso_dwg_no=:i AND line_no=:l AND iso_run_no=:p AND dwg_spool_no=:s
             ORDER BY joint_no""",
         key, ttl=0,
@@ -1861,6 +1866,35 @@ def page_update() -> None:
         st.info("No joints for this selection.")
         return
     st.dataframe(joints, use_container_width=True, hide_index=True)
+
+    if is_irn:
+        not_ready = joints.loc[(joints.fitup_date == "") | (joints.welding_date == ""),
+                               "joint_no"].tolist()
+        if not_ready:
+            st.caption(f"Not yet fit-up + welded: {', '.join(map(str, not_ready))}")
+        already = joints.loc[joints.irn_date != "", "joint_no"].tolist()
+        if already:
+            st.caption(f"Already IRN'd: {', '.join(map(str, already))}")
+        irn_date_in = st.date_input("IRN Date", value=date.today(), format="DD/MM/YYYY")
+        irn_report = st.text_input("IRN Report No")
+        if st.button("Save IRN", type="primary"):
+            if not irn_report.strip():
+                st.warning("Enter an IRN report no.")
+                return
+            db.execute(
+                """UPDATE spools SET irn_date = :d, irn_report_no = :r
+                    WHERE iso_dwg_no=:i AND line_no=:l AND iso_run_no=:p AND dwg_spool_no=:s""",
+                {"d": irn_date_in.isoformat(), "r": irn_report.strip(),
+                 "i": iso, "l": line, "p": pageno, "s": spool},
+            )
+            try:
+                db.execute("INSERT INTO user_log (username) VALUES (:u)",
+                           {"u": f"{st.session_state['user']} [irn_date/irn_report_no]"})
+            except Exception:
+                pass
+            st.success(f"Updated IRN date/report no for all {len(joints)} joint(s) of this spool.")
+            st.rerun()
+        return
 
     if col == "fitup_date":
         eligible = joints.loc[joints.fitup_date == "", "joint_no"].tolist()
@@ -3230,7 +3264,8 @@ def page_inventory() -> None:
 GATED_TABS = {
     "Targets & plan": {"Targets & plan": "Targets"},
     "Update progress": {"Fit-Up updates": "Update Fit-Up",
-                        "Welding updates": "Update Welding"},
+                        "Welding updates": "Update Welding",
+                        "IRN updates": "Update IRN"},
     "Scan & update (QR)": {"Shop-floor QR scan (this tab only)": "Field Scan"},
     "Delivery": {"Painting delivery": "Painting Delivery",
                  "Site delivery": "Site Delivery"},
