@@ -159,7 +159,7 @@ create table if not exists public.manpower_reports (
 create table if not exists public.daily_concerns (
     id           bigint generated always as identity primary key,
     date         text not null,        -- 'YYYY-MM-DD'
-    category     text not null,        -- Material | Manpower | Equipment | Quality | Schedule | Other
+    category     text not null,        -- Material | Manpower | Equipment | Quality | Schedule | ISO Drawing | Other
     note         text not null,
     raised_by    text,
     created_at   timestamptz not null default now()

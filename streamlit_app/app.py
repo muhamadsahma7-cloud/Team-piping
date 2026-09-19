@@ -3641,12 +3641,13 @@ def page_manpower() -> None:
         st.dataframe(cdf.drop(columns=["id"]), use_container_width=True, hide_index=True)
         if can_edit:
             c1, c2 = st.columns([3, 1])
-            labels = [f"{r['date']} · {r['category']} · {r['note'][:40]}"
-                     for _, r in cdf.iterrows()]
-            pick = c1.selectbox("Delete a concern", labels, key="concern_del_pick")
-            if c2.button("🗑 Delete", key="concern_del_btn", disabled=not labels):
-                target_id = int(cdf.iloc[labels.index(pick)]["id"])
-                db.execute("DELETE FROM daily_concerns WHERE id = :i", {"i": target_id})
+            ids = cdf["id"].astype(int).tolist()
+            label_of = {int(r["id"]): f"{r['date']} · {r['category']} · {r['note'][:40]}"
+                       for _, r in cdf.iterrows()}
+            pick_id = c1.selectbox("Delete a concern", ids, format_func=lambda i: label_of[i],
+                                   key="concern_del_pick")
+            if c2.button("🗑 Delete", key="concern_del_btn", disabled=not ids):
+                db.execute("DELETE FROM daily_concerns WHERE id = :i", {"i": pick_id})
                 st.cache_data.clear()
                 st.success("Deleted.")
                 st.rerun()
