@@ -986,10 +986,12 @@ def page_overview() -> None:
             use_container_width=True,
         )
 
-    def breakdown(dim: str) -> pd.DataFrame:
+    def breakdown(dims: str | tuple[str, ...], label: str) -> pd.DataFrame:
+        cols = (dims,) if isinstance(dims, str) else tuple(dims)
+        key = " || ' / ' || ".join(f"coalesce(nullif(trim({c}::text),''),'(blank)')" for c in cols)
         d = db.query(
             f"""
-            SELECT coalesce(nullif(trim({dim}::text),''),'(blank)') AS "{dim}",
+            SELECT {key} AS grp,
                    count(*) AS joints,
                    round(coalesce(sum(joint_size),0),2) AS dia_inch,
                    round(coalesce(sum(joint_size) FILTER (
@@ -1005,21 +1007,20 @@ def page_overview() -> None:
         sp = db.query(
             f"""
             WITH s AS (
-                SELECT coalesce(nullif(trim({dim}::text),''),'(blank)') AS k,
+                SELECT {key} AS k,
                        bool_and(coalesce(welding_date ~ '{_ISO}'
                          AND substr(welding_date,1,10) <= :asof, false)) AS welded
                 FROM spools
                 WHERE shop_field='S'
-                GROUP BY coalesce(nullif(trim({dim}::text),''),'(blank)'),
-                         iso_dwg_no, line_no, iso_run_no, dwg_spool_no
+                GROUP BY k, iso_dwg_no, line_no, iso_run_no, dwg_spool_no
             )
-            SELECT k AS "{dim}", count(*) AS spools,
+            SELECT k AS grp, count(*) AS spools,
                    count(*) FILTER (WHERE welded) AS spool_done
             FROM s GROUP BY 1
             """,
             {"asof": asof.isoformat()}, ttl=30,
         )
-        d = d.merge(sp, on=dim, how="left")
+        d = d.merge(sp, on="grp", how="left")
         for cc in ("joints", "dia_inch", "fitup_di", "welding_di"):
             d[cc] = d[cc].astype(float)
         for cc in ("spools", "spool_done"):
@@ -1037,7 +1038,8 @@ def page_overview() -> None:
                                                           "fitup_%"].clip(upper=99)
         d.loc[d["welding_bal"] > 0.005, "welding_%"] = d.loc[d["welding_bal"] > 0.005,
                                                               "welding_%"].clip(upper=99)
-        return d[[dim, "spools", "spool_done", "joints", "dia_inch",
+        d = d.rename(columns={"grp": label})
+        return d[[label, "spools", "spool_done", "joints", "dia_inch",
                   "fitup_di", "fitup_bal", "fitup_%",
                   "welding_di", "welding_bal", "welding_%"]]
 
@@ -1045,22 +1047,20 @@ def page_overview() -> None:
     st.subheader("Breakdown")
     st.caption("Shop spools only · `spool_done` = every joint welded by the as-of date "
                "(ties to *Total completed spools* above).")
-    t1, t2, t3, t4, t5 = st.tabs(
-        ["By work order", "By batch no", "By area", "By size", "By material"])
+    t1, t2, t3, t4 = st.tabs(
+        ["By work order", "By batch no", "By area", "By size & material"])
     with t1:
-        show_table(breakdown("wo_no"), "progress_by_wo",
+        show_table(breakdown("wo_no", "wo_no"), "progress_by_wo",
                    progress=("fitup_%", "welding_%"), money=_mny)
     with t2:
-        show_table(breakdown("batch_no"), "progress_by_batch",
+        show_table(breakdown("batch_no", "batch_no"), "progress_by_batch",
                    progress=("fitup_%", "welding_%"), money=_mny)
     with t3:
-        show_table(breakdown("area"), "progress_by_area",
+        show_table(breakdown("area", "area"), "progress_by_area",
                    progress=("fitup_%", "welding_%"), money=_mny)
     with t4:
-        show_table(breakdown("joint_size"), "progress_by_size",
-                   progress=("fitup_%", "welding_%"), money=_mny)
-    with t5:
-        show_table(breakdown("material_group"), "progress_by_material",
+        show_table(breakdown(("joint_size", "material_group"), "Size / Material"),
+                   "progress_by_size_material",
                    progress=("fitup_%", "welding_%"), money=_mny)
 
 
