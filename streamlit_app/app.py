@@ -2629,7 +2629,8 @@ def _delivery_worklist(kind: str) -> None:
             -- filtering rows before aggregating (the old query's WHERE {{pending}}
             -- before GROUP BY) let one odd joint's row silently drop other joints
             -- out of the "all welded" / delivered checks for the whole spool.
-            SELECT iso_dwg_no, line_no, iso_run_no, dwg_spool_no,
+            SELECT trim(iso_dwg_no) AS iso_dwg_no, trim(line_no) AS line_no,
+                   trim(iso_run_no) AS iso_run_no, trim(dwg_spool_no) AS dwg_spool_no,
                    coalesce(max(nullif(trim(paint_system),'')),'')        AS paint_system,
                    max(nullif(trim(delivery_date),''))                   AS painting_date,
                    count(*)                                               AS joints,
@@ -2650,7 +2651,9 @@ def _delivery_worklist(kind: str) -> None:
                    )                                                     AS is_straight,
                    bool_and(coalesce(trim(welding_date),'')<>'')         AS all_welded
             FROM spools
-            GROUP BY iso_dwg_no, line_no, iso_run_no, dwg_spool_no
+            -- trimmed, like classify()'s spool_key, so stray whitespace on one
+            -- joint's row doesn't split one physical spool into two groups here
+            GROUP BY trim(iso_dwg_no), trim(line_no), trim(iso_run_no), trim(dwg_spool_no)
         )
         SELECT iso_dwg_no, line_no, iso_run_no AS page_no, dwg_spool_no,
                CASE WHEN is_straight THEN 'Straight Pipe' ELSE 'Fabricated Spool' END
@@ -2690,8 +2693,8 @@ def _delivery_worklist(kind: str) -> None:
                 return
             db.execute_many(
                 f"""UPDATE spools SET {do_col}=:do, {dt_col}=:d
-                    WHERE shop_field='S' AND iso_dwg_no=:i AND line_no=:l
-                      AND iso_run_no=:p AND dwg_spool_no=:s""",
+                    WHERE trim(iso_dwg_no)=:i AND trim(line_no)=:l
+                      AND trim(iso_run_no)=:p AND trim(dwg_spool_no)=:s""",
                 [{"do": do_no.strip(), "d": d.isoformat(), "i": r.iso_dwg_no,
                   "l": r.line_no, "p": r.page_no, "s": r.dwg_spool_no}
                  for r in picked.itertuples()],
