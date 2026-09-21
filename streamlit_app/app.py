@@ -2609,17 +2609,16 @@ def _delivery_worklist(kind: str) -> None:
     do_label = "Painting DO no" if painting else "Site DO no"
     verb = "painting delivery" if painting else "site delivery"
 
+    needs_paint = "upper(trim(coalesce(paint_status,''))) = 'YES'"
     if painting:
-        pending = ("coalesce(trim(paint_system),'')<>'' "
-                   "AND coalesce(trim(delivery_date),'')=''")
-        st.caption("Spools that **need painting** (paint system filled) and haven't "
-                   "been sent yet. Blank paint system = no painting, not shown here.")
+        pending = f"({needs_paint}) AND coalesce(trim(delivery_date),'')=''"
+        st.caption("Spools that **need painting** (Paint status = Yes) and haven't "
+                   "been sent yet. Paint status ≠ Yes = no painting, not shown here.")
     else:
         pending = ("coalesce(trim(site_delivery_date),'')='' "
-                   "AND (coalesce(trim(delivery_date),'')<>'' "
-                   "OR coalesce(trim(paint_system),'')='')")
+                   f"AND (coalesce(trim(delivery_date),'')<>'' OR NOT ({needs_paint}))")
         st.caption("Spools ready for **site**: already sent to painting **or** no "
-                   "painting needed (blank paint system), and not yet sent to site.")
+                   "painting needed (Paint status ≠ Yes), and not yet sent to site.")
 
     only_welded = st.toggle("Only welding-complete spools", value=True,
                             help="Straight pipe doesn't need welding to be ready, so it "
