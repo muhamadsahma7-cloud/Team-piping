@@ -2649,6 +2649,8 @@ def _delivery_worklist(kind: str) -> None:
             GROUP BY iso_dwg_no, line_no, iso_run_no, dwg_spool_no
         )
         SELECT iso_dwg_no, line_no, iso_run_no AS page_no, dwg_spool_no,
+               CASE WHEN is_straight THEN 'Straight Pipe' ELSE 'Fabricated Spool' END
+                                                                    AS spool_type,
                paint_system, painting_date, joints, dia_inch,
                (is_straight OR all_welded) AS welded
         FROM base
@@ -2704,12 +2706,14 @@ def _delivery_worklist(kind: str) -> None:
         st.dataframe(
             db.query(
                 f"""SELECT iso_dwg_no, line_no, iso_run_no AS page_no, dwg_spool_no,
+                           CASE WHEN bool_or({_IS_STRAIGHT_SQL}) THEN 'Straight Pipe'
+                                ELSE 'Fabricated Spool' END       AS spool_type,
                            max({do_col}) AS do_no, max({dt_col}) AS date,
                            count(*) AS joints
                     FROM spools
                     WHERE (shop_field='S' OR {_IS_STRAIGHT_SQL})
                       AND coalesce(trim({dt_col}),'')<>''
-                    GROUP BY 1,2,3,4 ORDER BY 6 DESC, 1""",
+                    GROUP BY 1,2,3,4 ORDER BY 7 DESC, 1""",
                 ttl=0,
             ),
             use_container_width=True, hide_index=True,
