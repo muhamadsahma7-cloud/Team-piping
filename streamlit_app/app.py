@@ -2633,6 +2633,7 @@ def _delivery_worklist(kind: str) -> None:
                    trim(iso_run_no) AS iso_run_no, trim(dwg_spool_no) AS dwg_spool_no,
                    coalesce(max(nullif(trim(paint_system),'')),'')        AS paint_system,
                    max(nullif(trim(delivery_date),''))                   AS painting_date,
+                   coalesce(max(nullif(trim(irn_report_no),'')),'')      AS irn_report_no,
                    count(*)                                               AS joints,
                    round(sum(joint_size)::numeric, 2)                     AS dia_inch,
                    bool_or(shop_field='S')                                AS any_shop,
@@ -2662,7 +2663,7 @@ def _delivery_worklist(kind: str) -> None:
         SELECT iso_dwg_no, line_no, iso_run_no AS page_no, dwg_spool_no,
                CASE WHEN is_straight THEN 'Straight Pipe' ELSE 'Fabricated Spool' END
                                                                     AS spool_type,
-               paint_system, painting_date, joints, dia_inch,
+               irn_report_no, paint_system, painting_date, joints, dia_inch,
                (is_straight OR all_welded) AS welded
         FROM base
         WHERE (any_shop OR is_straight) AND ({pending_cond}) {where_welded}
@@ -2719,12 +2720,13 @@ def _delivery_worklist(kind: str) -> None:
                 f"""SELECT iso_dwg_no, line_no, iso_run_no AS page_no, dwg_spool_no,
                            CASE WHEN bool_or({_IS_STRAIGHT_SQL}) THEN 'Straight Pipe'
                                 ELSE 'Fabricated Spool' END       AS spool_type,
+                           coalesce(max(nullif(trim(irn_report_no),'')),'') AS irn_report_no,
                            max({do_col}) AS do_no, max({dt_col}) AS date,
                            count(*) AS joints
                     FROM spools
                     WHERE (shop_field='S' OR {_IS_STRAIGHT_SQL})
                       AND coalesce(trim({dt_col}),'')<>''
-                    GROUP BY 1,2,3,4 ORDER BY 7 DESC, 1""",
+                    GROUP BY 1,2,3,4 ORDER BY 8 DESC, 1""",
                 ttl=0,
             ),
             use_container_width=True, hide_index=True,
