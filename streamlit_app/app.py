@@ -1780,8 +1780,78 @@ def page_wo_summary() -> None:
     )
 
 
+def _clear_dates_ui(col: str, joints: pd.DataFrame, key: dict) -> None:
+    """Undo an accidental save from Update progress. col is 'fitup_date',
+    'welding_date' or 'irn'. Fit-Up can't be cleared while the joint is
+    already welded (clear welding first). Fit-Up/Welding also clear who did
+    it and the QR scan-history row, otherwise the unique (qr_id, joint,
+    activity) guard would block that joint from ever being scanned again."""
+    from sqlalchemy import text as _t
+    label = {"fitup_date": "fit-up date", "welding_date": "welding date",
+             "irn": "IRN date / report no"}[col]
+    with st.expander(f"🗑 Clear a saved {label} (entered by mistake)"):
+        targets: list = []
+        if col == "irn":
+            has = joints.loc[(joints.irn_date != "") | (joints.irn_report_no != ""),
+                             "joint_no"].tolist()
+            if not has:
+                st.caption("No IRN saved on this spool.")
+                return
+            st.caption(f"Clears the IRN date and report no. on all {len(joints)} "
+                       "joint(s) of this spool.")
+        else:
+            if col == "fitup_date":
+                clearable = joints.loc[(joints.fitup_date != "") & (joints.welding_date == ""),
+                                       "joint_no"].tolist()
+                blocked = joints.loc[joints.welding_date != "", "joint_no"].tolist()
+                if blocked:
+                    st.caption("Already welded — clear the welding date first: "
+                               + ", ".join(map(str, blocked)))
+            else:
+                clearable = joints.loc[joints.welding_date != "", "joint_no"].tolist()
+            if not clearable:
+                st.caption("No saved dates to clear here.")
+                return
+            targets = st.multiselect("Joint no(s) to clear", clearable, key=f"clr_j_{col}")
+        ok = st.checkbox("Confirm — remove the saved value", key=f"clr_ok_{col}")
+        if not st.button("Clear", key=f"clr_btn_{col}",
+                         disabled=not ok or (col != "irn" and not targets)):
+            return
+        if col == "irn":
+            db.execute(
+                """UPDATE spools SET irn_date = NULL, irn_report_no = NULL
+                    WHERE iso_dwg_no=:i AND line_no=:l AND iso_run_no=:p AND dwg_spool_no=:s""",
+                key,
+            )
+            what = "irn_date/irn_report_no"
+        else:
+            activity = "Fit-Up" if col == "fitup_date" else "Welding"
+            by_sql = ("fitup_by = NULL" if col == "fitup_date"
+                      else "welding_by = NULL, welder_no = NULL")
+            where = ("iso_dwg_no=:i AND line_no=:l AND iso_run_no=:p "
+                     "AND dwg_spool_no=:s AND joint_no=:j")
+            with db.engine().begin() as cx:
+                for j in targets:
+                    p = {**key, "j": j}
+                    cx.execute(_t(
+                        "DELETE FROM field_updates WHERE activity = :a AND joint_no = :j "
+                        f"AND qr_id IN (SELECT qr_id FROM spools WHERE {where} "
+                        "AND qr_id IS NOT NULL)"), {**p, "a": activity})
+                    cx.execute(_t(f"UPDATE spools SET {col} = NULL, {by_sql} WHERE {where}"), p)
+            what = f"{col} x{len(targets)}"
+        try:
+            db.execute("INSERT INTO user_log (username) VALUES (:u)",
+                       {"u": f"{st.session_state['user']} [clear {what}]"})
+        except Exception:
+            pass
+        st.cache_data.clear()
+        st.success(f"Cleared the saved {label}.")
+        st.rerun()
+
+
 def page_update() -> None:
     st.header("Update progress")
+    _ensure_qr_schema(db._conn_name())
     perm = st.session_state.get("permission", "")
 
     modes = []
@@ -1882,6 +1952,7 @@ def page_update() -> None:
         already = joints.loc[joints.irn_date != "", "joint_no"].tolist()
         if already:
             st.caption(f"Already IRN'd: {', '.join(map(str, already))}")
+        _clear_dates_ui("irn", joints, key)
         irn_date_in = st.date_input("IRN Date", value=date.today(), format="DD/MM/YYYY")
         irn_report = st.text_input("IRN Report No")
         if st.button("Save IRN", type="primary"):
@@ -1916,6 +1987,7 @@ def page_update() -> None:
 
     if locked:
         st.caption(f"Already set (locked): {', '.join(map(str, locked))}")
+    _clear_dates_ui(col, joints, key)
     if not eligible:
         st.info("No joints available to update here.")
         return
