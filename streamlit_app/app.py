@@ -2649,7 +2649,11 @@ def _delivery_worklist(kind: str) -> None:
                      )) LIKE 'STRAIGHT%',
                      bool_and(dwg_spool_no LIKE 'SP-SPL%')
                    )                                                     AS is_straight,
-                   bool_and(coalesce(trim(welding_date),'')<>'')         AS all_welded
+                   -- fabricated (non-straight) spools only need their SHOP-side
+                   -- joints welded, same as classify() (sdf[shop_field=='S']) -
+                   -- a field-side tie-in joint with no dates shouldn't block it
+                   coalesce(bool_and(coalesce(trim(welding_date),'')<>'')
+                            FILTER (WHERE shop_field='S'), false)         AS all_welded
             FROM spools
             -- trimmed, like classify()'s spool_key, so stray whitespace on one
             -- joint's row doesn't split one physical spool into two groups here
