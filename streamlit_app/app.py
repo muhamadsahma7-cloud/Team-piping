@@ -2621,20 +2621,39 @@ def _delivery_worklist(kind: str) -> None:
         st.caption("Spools ready for **site**: already sent to painting **or** no "
                    "painting needed (blank paint system), and not yet sent to site.")
 
-    only_welded = st.toggle("Only welding-complete spools", value=True)
-    having = "HAVING bool_and(coalesce(trim(welding_date),'')<>'')" if only_welded else ""
+    only_welded = st.toggle("Only welding-complete spools", value=True,
+                            help="Straight pipe doesn't need welding to be ready, so it "
+                                 "always shows regardless of this toggle.")
+    where_welded = "AND (is_straight OR all_welded)" if only_welded else ""
     df = db.query(
         f"""
+        WITH base AS (
+            SELECT iso_dwg_no, line_no, iso_run_no, dwg_spool_no,
+                   coalesce(max(paint_system),'')                     AS paint_system,
+                   max(delivery_date)                                 AS painting_date,
+                   count(*)                                           AS joints,
+                   round(sum(joint_size)::numeric, 2)                 AS dia_inch,
+                   bool_or(shop_field='S')                            AS any_shop,
+                   -- explicit spool_type wins, first non-blank in id order when a
+                   -- spool's joints disagree; blank falls back to the legacy
+                   -- SP-SPL prefix guess (mirrors reports._is_straight_pipe)
+                   coalesce(
+                     upper(trim(
+                       (array_agg(nullif(trim(spool_type), '') ORDER BY id)
+                          FILTER (WHERE nullif(trim(spool_type), '') IS NOT NULL))[1]
+                     )) LIKE 'STRAIGHT%',
+                     bool_and(dwg_spool_no LIKE 'SP-SPL%')
+                   )                                                   AS is_straight,
+                   bool_and(coalesce(trim(welding_date),'')<>'')       AS all_welded
+            FROM spools
+            WHERE {pending}
+            GROUP BY iso_dwg_no, line_no, iso_run_no, dwg_spool_no
+        )
         SELECT iso_dwg_no, line_no, iso_run_no AS page_no, dwg_spool_no,
-               coalesce(max(paint_system),'')                     AS paint_system,
-               max(delivery_date)                                 AS painting_date,
-               count(*)                                           AS joints,
-               round(sum(joint_size)::numeric, 2)                 AS dia_inch,
-               bool_and(coalesce(trim(welding_date),'')<>'')      AS welded
-        FROM spools
-        WHERE shop_field='S' AND {pending}
-        GROUP BY 1,2,3,4
-        {having}
+               paint_system, painting_date, joints, dia_inch,
+               (is_straight OR all_welded) AS welded
+        FROM base
+        WHERE (any_shop OR is_straight) {where_welded}
         ORDER BY 1,2,3,4
         """,
         ttl=0,
@@ -2689,7 +2708,8 @@ def _delivery_worklist(kind: str) -> None:
                            max({do_col}) AS do_no, max({dt_col}) AS date,
                            count(*) AS joints
                     FROM spools
-                    WHERE shop_field='S' AND coalesce(trim({dt_col}),'')<>''
+                    WHERE (shop_field='S' OR {_IS_STRAIGHT_SQL})
+                      AND coalesce(trim({dt_col}),'')<>''
                     GROUP BY 1,2,3,4 ORDER BY 6 DESC, 1""",
                 ttl=0,
             ),
