@@ -758,6 +758,8 @@ SELECT
   (SELECT count(*) FROM sp_issued
      WHERE is_straight AND is_issued AND NOT delivered AND NOT to_paint
        AND NOT needs_paint)                                                   AS straight_ready_nonpaint,
+  (SELECT count(*) FROM sp_issued
+     WHERE is_straight AND is_issued AND delivered)                           AS straight_delivered_site,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S')                       AS shop_di,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='F')                       AS field_di,
   (SELECT count(DISTINCT wo_no) FROM spools
@@ -891,6 +893,7 @@ def page_overview() -> None:
 
     srp = int(s["straight_ready_paint"] or 0)
     srn = int(s["straight_ready_nonpaint"] or 0)
+    ssd = int(s["straight_delivered_site"] or 0)
     c_ = st.columns(3)
     c_[0].metric("Straight pipe ready to deliver — painting", f"{srp:,}", pct(srp),
                 delta_color="off", border=True,
@@ -900,6 +903,10 @@ def page_overview() -> None:
                 delta_color="off", border=True,
                 help="Straight pipe (Spool type) on an issued work order, no "
                      "painting required, not yet sent to painting or site.")
+    c_[2].metric("Straight pipe delivered to site", f"{ssd:,}", pct(ssd),
+                delta_color="off", border=True,
+                help="Straight pipe (Spool type) on an issued work order, already "
+                     "has a site delivery date.")
 
     st.subheader("Cumulative S-curve (shop dia-inch)")
     sc = db.query(
