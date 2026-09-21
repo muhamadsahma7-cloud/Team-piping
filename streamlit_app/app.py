@@ -3075,6 +3075,24 @@ def _upsert_bom(df: pd.DataFrame) -> tuple[int, int]:
     return updated, inserted
 
 
+def _read_excel_upload(up):
+    """Read an uploaded file as an Excel workbook -> DataFrame, or None (with
+    a friendly st.error already shown) if it isn't actually a valid .xlsx -
+    wrong format (.xls/.csv renamed), corrupted, or an empty/partial upload.
+    Without this, a bad file crashes the whole page with a raw
+    zipfile.BadZipFile traceback."""
+    try:
+        return pd.read_excel(up, engine="openpyxl")
+    except Exception:
+        st.error(
+            "Couldn't read that file as an Excel workbook. Make sure it's a real "
+            "**.xlsx** file (not .xls, .csv, or a renamed file) and that it isn't "
+            "corrupted — try opening it in Excel and using **Save As → .xlsx** "
+            "again, then re-upload."
+        )
+        return None
+
+
 def _material_import_ui(*, table: str, template_fn, parse_fn, upsert_fn,
                         key_desc: str, upload_key: str) -> None:
     """Shared 'download template -> upload -> merge or replace' block for
@@ -3089,7 +3107,9 @@ def _material_import_ui(*, table: str, template_fn, parse_fn, upsert_fn,
     up = st.file_uploader("Excel file (.xlsx)", type=["xlsx"], key=upload_key)
     if up is None:
         return
-    raw = pd.read_excel(up, engine="openpyxl")
+    raw = _read_excel_upload(up)
+    if raw is None:
+        return
     clean, missing = parse_fn(raw)
     st.write(f"File has **{len(raw):,}** row(s) → **{len(clean):,}** with an item code.")
     if missing:
@@ -3620,8 +3640,7 @@ def page_admin() -> None:
     st.caption("Master-format sheet (headers `WO NO`, `ISO DWG NO.`, …). "
                "This **replaces every row** in `spools`.")
     up = st.file_uploader("Excel file (.xlsx)", type=["xlsx"])
-    if up is not None:
-        raw = pd.read_excel(up, engine="openpyxl")
+    if up is not None and (raw := _read_excel_upload(up)) is not None:
         clean, missing = reports.spools_df_from_excel(raw)
         st.write(f"File has **{len(raw):,}** rows → **{len(clean.columns)}** mapped columns.")
         if missing:
