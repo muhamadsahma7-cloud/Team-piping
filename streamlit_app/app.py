@@ -1780,25 +1780,28 @@ def page_wo_summary() -> None:
     )
 
 
-def _clear_dates_ui(col: str, joints: pd.DataFrame, key: dict) -> None:
+def _clear_dates_ui(col: str, joints: pd.DataFrame, key: dict,
+                    *, spool_sql: str = "dwg_spool_no=:s") -> None:
     """Undo an accidental save from Update progress. col is 'fitup_date',
     'welding_date' or 'irn'. Fit-Up can't be cleared while the joint is
     already welded (clear welding first). Fit-Up/Welding also clear who did
     it and the QR scan-history row, otherwise the unique (qr_id, joint,
-    activity) guard would block that joint from ever being scanned again."""
+    activity) guard would block that joint from ever being scanned again.
+    spool_sql lets IRN mode span the several spools it has selected."""
     from sqlalchemy import text as _t
     label = {"fitup_date": "fit-up date", "welding_date": "welding date",
              "irn": "IRN date / report no"}[col]
+    where_spool = f"iso_dwg_no=:i AND line_no=:l AND iso_run_no=:p AND {spool_sql}"
     with st.expander(f"🗑 Clear a saved {label} (entered by mistake)"):
         targets: list = []
         if col == "irn":
-            has = joints.loc[(joints.irn_date != "") | (joints.irn_report_no != ""),
-                             "joint_no"].tolist()
-            if not has:
-                st.caption("No IRN saved on this spool.")
+            has = joints[(joints.irn_date != "") | (joints.irn_report_no != "")]
+            if has.empty:
+                st.caption("No IRN saved on the spool(s) picked.")
                 return
-            st.caption(f"Clears the IRN date and report no. on all {len(joints)} "
-                       "joint(s) of this spool.")
+            n_sp = has["dwg_spool_no"].nunique() if "dwg_spool_no" in has.columns else 1
+            st.caption(f"Clears the IRN date and report no. on every joint of the "
+                       f"{n_sp} spool(s) picked above.")
         else:
             if col == "fitup_date":
                 clearable = joints.loc[(joints.fitup_date != "") & (joints.welding_date == ""),
@@ -1819,8 +1822,8 @@ def _clear_dates_ui(col: str, joints: pd.DataFrame, key: dict) -> None:
             return
         if col == "irn":
             db.execute(
-                """UPDATE spools SET irn_date = NULL, irn_report_no = NULL
-                    WHERE iso_dwg_no=:i AND line_no=:l AND iso_run_no=:p AND dwg_spool_no=:s""",
+                f"""UPDATE spools SET irn_date = NULL, irn_report_no = NULL
+                     WHERE {where_spool}""",
                 key,
             )
             what = "irn_date/irn_report_no"
@@ -1828,8 +1831,7 @@ def _clear_dates_ui(col: str, joints: pd.DataFrame, key: dict) -> None:
             activity = "Fit-Up" if col == "fitup_date" else "Welding"
             by_sql = ("fitup_by = NULL" if col == "fitup_date"
                       else "welding_by = NULL, welder_no = NULL")
-            where = ("iso_dwg_no=:i AND line_no=:l AND iso_run_no=:p "
-                     "AND dwg_spool_no=:s AND joint_no=:j")
+            where = f"{where_spool} AND joint_no=:j"
             with db.engine().begin() as cx:
                 for j in targets:
                     p = {**key, "j": j}
@@ -1901,11 +1903,23 @@ def page_update() -> None:
         f"AND iso_run_no=:p AND coalesce(dwg_spool_no,'')<>'' ORDER BY 1",
         {"i": iso, "l": line, "p": pageno}, ttl=0,
     )["dwg_spool_no"].tolist()
-    spool = st.selectbox("DWG SPOOL NO", [""] + spool_opts)
-    if not spool:
-        return
-
-    key = {"i": iso, "l": line, "p": pageno, "s": spool}
+    if is_irn:
+        # IRN is recorded per spool, so several can share one report no.
+        spools_sel = st.multiselect(
+            "DWG SPOOL NO", spool_opts,
+            help="Pick one or more spools — the IRN date and report no. are "
+                 "applied to every joint of each spool picked.")
+        if not spools_sel:
+            return
+        spool_sql = "dwg_spool_no = ANY(:ss)"
+        key = {"i": iso, "l": line, "p": pageno, "ss": spools_sel}
+    else:
+        spool = st.selectbox("DWG SPOOL NO", [""] + spool_opts)
+        if not spool:
+            return
+        spool_sql = "dwg_spool_no=:s"
+        key = {"i": iso, "l": line, "p": pageno, "s": spool}
+    where_spool = (f"iso_dwg_no=:i AND line_no=:l AND iso_run_no=:p AND {spool_sql}")
     info = db.query(
         f"""SELECT string_agg(DISTINCT nullif(trim(wo_no),''), ', ')      AS wo_no,
                    string_agg(DISTINCT nullif(trim(batch_no),''), ', ')    AS batch_no,
@@ -1915,7 +1929,7 @@ def page_update() -> None:
                    string_agg(DISTINCT nullif(trim(material_group),''), ', ') AS material_group,
                    string_agg(DISTINCT nullif(trim(status),''), ', ')      AS status,
                    count(*) AS joints
-            {base} AND iso_dwg_no=:i AND line_no=:l AND iso_run_no=:p AND dwg_spool_no=:s""",
+            {base} AND {where_spool}""",
         key, ttl=0,
     ).iloc[0]
     st.markdown(
@@ -1930,13 +1944,14 @@ def page_update() -> None:
     )
 
     joints = db.query(
-        f"""SELECT joint_no, joint_size, item_1, sch_rating_1, item_2, sch_rating_2,
+        f"""SELECT {'dwg_spool_no,' if is_irn else ''}
+                   joint_no, joint_size, item_1, sch_rating_1, item_2, sch_rating_2,
                    coalesce(fitup_date,'')     AS fitup_date,
                    coalesce(welding_date,'')   AS welding_date,
                    coalesce(irn_date,'')       AS irn_date,
                    coalesce(irn_report_no,'')  AS irn_report_no
-            {base} AND iso_dwg_no=:i AND line_no=:l AND iso_run_no=:p AND dwg_spool_no=:s
-            ORDER BY joint_no""",
+            {base} AND {where_spool}
+            ORDER BY {'dwg_spool_no,' if is_irn else ''} joint_no""",
         key, ttl=0,
     )
     if joints.empty:
@@ -1945,32 +1960,37 @@ def page_update() -> None:
     st.dataframe(joints, use_container_width=True, hide_index=True)
 
     if is_irn:
-        not_ready = joints.loc[(joints.fitup_date == "") | (joints.welding_date == ""),
-                               "joint_no"].tolist()
-        if not_ready:
-            st.caption(f"Not yet fit-up + welded: {', '.join(map(str, not_ready))}")
-        already = joints.loc[joints.irn_date != "", "joint_no"].tolist()
-        if already:
-            st.caption(f"Already IRN'd: {', '.join(map(str, already))}")
-        _clear_dates_ui("irn", joints, key)
+        def _spools_of(sel: pd.DataFrame) -> str:
+            return ", ".join(sorted(sel["dwg_spool_no"].astype(str).unique()))
+
+        not_ready = joints[(joints.fitup_date == "") | (joints.welding_date == "")]
+        if not not_ready.empty:
+            st.caption(f"Not yet fit-up + welded: {_spools_of(not_ready)}")
+        already = joints[joints.irn_date != ""]
+        if not already.empty:
+            st.caption(f"Already IRN'd: {_spools_of(already)}")
+        _clear_dates_ui("irn", joints, key, spool_sql=spool_sql)
         irn_date_in = st.date_input("IRN Date", value=date.today(), format="DD/MM/YYYY")
         irn_report = st.text_input("IRN Report No")
-        if st.button("Save IRN", type="primary"):
+        n_spools = len(spools_sel)
+        if st.button(f"Save IRN for {n_spools} spool(s)", type="primary"):
             if not irn_report.strip():
                 st.warning("Enter an IRN report no.")
                 return
             db.execute(
-                """UPDATE spools SET irn_date = :d, irn_report_no = :r
-                    WHERE iso_dwg_no=:i AND line_no=:l AND iso_run_no=:p AND dwg_spool_no=:s""",
-                {"d": irn_date_in.isoformat(), "r": irn_report.strip(),
-                 "i": iso, "l": line, "p": pageno, "s": spool},
+                f"""UPDATE spools SET irn_date = :d, irn_report_no = :r
+                     WHERE {where_spool}""",
+                {**key, "d": irn_date_in.isoformat(), "r": irn_report.strip()},
             )
             try:
                 db.execute("INSERT INTO user_log (username) VALUES (:u)",
-                           {"u": f"{st.session_state['user']} [irn_date/irn_report_no]"})
+                           {"u": f"{st.session_state['user']} "
+                                 f"[irn_date/irn_report_no x{n_spools} spool(s)]"})
             except Exception:
                 pass
-            st.success(f"Updated IRN date/report no for all {len(joints)} joint(s) of this spool.")
+            st.cache_data.clear()
+            st.success(f"Updated IRN date/report no for {n_spools} spool(s) "
+                       f"({len(joints)} joint(s)).")
             st.rerun()
         return
 
@@ -2701,6 +2721,20 @@ def _delivery_worklist(kind: str) -> None:
                             help="Straight pipe doesn't need welding to be ready, so it "
                                  "always shows regardless of this toggle.")
     where_welded = "AND (is_straight OR all_welded)" if only_welded else ""
+
+    # narrow a long worklist down before ticking
+    fc = st.columns(2)
+    f_iso = fc[0].multiselect("Filter ISO DWG NO", _distinct("iso_dwg_no"),
+                              key=f"{kind}_f_iso")
+    f_spool = fc[1].multiselect("Filter DWG SPOOL NO", _distinct("dwg_spool_no"),
+                                key=f"{kind}_f_spool")
+    where_filter, fparams = "", {}
+    if f_iso:
+        where_filter += " AND iso_dwg_no = ANY(:f_iso)"
+        fparams["f_iso"] = f_iso
+    if f_spool:
+        where_filter += " AND dwg_spool_no = ANY(:f_spool)"
+        fparams["f_spool"] = f_spool
     df = db.query(
         f"""
         WITH base AS (
@@ -2735,6 +2769,9 @@ def _delivery_worklist(kind: str) -> None:
                    coalesce(bool_and(coalesce(trim(welding_date),'')<>'')
                             FILTER (WHERE shop_field='S'), false)         AS all_welded
             FROM spools
+            -- iso_dwg_no / dwg_spool_no are part of the group key, so filtering
+            -- on them here can't partially drop a spool's joints
+            WHERE 1=1 {where_filter}
             -- trimmed, like classify()'s spool_key, so stray whitespace on one
             -- joint's row doesn't split one physical spool into two groups here
             GROUP BY trim(iso_dwg_no), trim(line_no), trim(iso_run_no), trim(dwg_spool_no)
@@ -2748,6 +2785,7 @@ def _delivery_worklist(kind: str) -> None:
         WHERE (any_shop OR is_straight) AND ({pending_cond}) {where_welded}
         ORDER BY 1,2,3,4
         """,
+        fparams,
         ttl=0,
     )
     if df.empty:
@@ -2755,7 +2793,8 @@ def _delivery_worklist(kind: str) -> None:
     else:
         df["dia_inch"] = df["dia_inch"].astype(float)
         df["joints"] = df["joints"].astype(int)
-        df.insert(0, "Send", False)
+        tick_all = st.checkbox(f"Tick all {len(df)} spool(s) listed", key=f"{kind}_all")
+        df.insert(0, "Send", tick_all)
 
         edited = st.data_editor(
             df, hide_index=True, use_container_width=True, key=f"{kind}_worklist",
