@@ -2112,8 +2112,18 @@ def _field_workers(trade_needed: str) -> pd.DataFrame:
     )
 
 
-def _register_worker_form(*, key: str, fixed_trade: str | None = None) -> None:
-    """Shared 'register a fitter / welder' form (roster page + inline on scan)."""
+def _register_worker_form(*, key: str, fixed_trade: str | None = None,
+                          expanded_key: str | None = None) -> None:
+    """Shared 'register a fitter / welder' form (roster page + inline on scan).
+    expanded_key: session_state key the caller's st.expander reads for its
+    `expanded=` state. Without this, a caller wrapping the form in a plain
+    st.expander() never sees the success/error message - st.rerun() below
+    re-executes the whole page from scratch, and an expander with no
+    explicit `expanded=` state renders collapsed again on that fresh run,
+    hiding the message inside a closed box (looks like "nothing happened"
+    even though the row was saved)."""
+    if expanded_key is not None:
+        st.session_state.setdefault(expanded_key, False)
     with st.form(key, clear_on_submit=True):
         c = st.columns(2)
         name = c[0].text_input("Full name")
@@ -2129,6 +2139,8 @@ def _register_worker_form(*, key: str, fixed_trade: str | None = None) -> None:
         go = st.form_submit_button("Register", type="primary")
     if not go:
         return
+    if expanded_key is not None:
+        st.session_state[expanded_key] = True   # keep it open through the rerun below
     nm = (name or "").strip()
     sn = (stamp or "").strip()
     p1, p2 = (pin1 or "").strip(), (pin2 or "").strip()
@@ -2286,8 +2298,9 @@ def page_scan() -> None:
         "SELECT id, name, trade, coalesce(stamp_no,'') AS stamp_no, pin "
         "FROM field_workers WHERE active ORDER BY name", ttl=0,
     )
-    with st.expander("➕ New fitter / welder? Register your name"):
-        _register_worker_form(key="reg_scan")
+    with st.expander("➕ New fitter / welder? Register your name",
+                     expanded=st.session_state.get("reg_scan_expanded", False)):
+        _register_worker_form(key="reg_scan", expanded_key="reg_scan_expanded")
     if allw.empty:
         st.warning("No fitter / welder registered yet — register above, then it "
                    "appears here.")
