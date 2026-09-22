@@ -2123,17 +2123,37 @@ def _register_worker_form(*, key: str, fixed_trade: str | None = None,
     prefill_name_key: session_state key of a 'your name' box to pre-fill with
     the name just registered, so the worker can carry straight on.
 
-    The success message has to survive a rerun: st.rerun() throws away
-    everything rendered in the run that called it, so an st.success() written
-    immediately before it never reaches the screen. The row saves, the form
-    clears, and nothing else changes - indistinguishable from the button
-    doing nothing. So stash the message and show it on the next run."""
+    Outcome messages have to survive a rerun and be placed where a phone can
+    actually see them. st.rerun() throws away everything rendered in the run
+    that called it, and a message written after the form lands below the
+    Register button - off-screen on a six-field phone form. Either way the
+    form clears and nothing visibly changes, which reads as a dead button:
+    a real report of "registration not saved" turned out to be a 3-digit PIN
+    being rejected by a warning the user never saw. So every outcome is
+    stashed and rendered on the next run, above the fields."""
     if expanded_key is not None:
         st.session_state.setdefault(expanded_key, False)
+
+    # Every outcome (saved, rejected, failed) is stashed and shown on the NEXT
+    # run, at the top of the box above the fields. Rendering it after the form
+    # put it below the Register button - off-screen on a phone, where the form
+    # is six fields tall - so a rejected attempt looked like a dead button.
     msg_key = f"{key}_msg"
-    done = st.session_state.pop(msg_key, None)
-    if done:
-        st.success(done)
+    shown = st.session_state.pop(msg_key, None)
+    if shown:
+        kind, txt = shown
+        {"ok": st.success, "warn": st.warning, "err": st.error}.get(kind, st.info)(txt)
+
+    def _finish(kind: str, txt: str) -> None:
+        st.session_state[msg_key] = (kind, txt)
+        try:                       # server-side trail, for diagnosing by phone
+            db.execute("INSERT INTO user_log (username) VALUES (:u)",
+                       {"u": f"{st.session_state.get('user', '?')} "
+                             f"[register {kind}] {txt[:90]}"})
+        except Exception:
+            pass
+        st.rerun()
+
     with st.form(key, clear_on_submit=True):
         c = st.columns(2)
         name = c[0].text_input("Full name")
@@ -2155,13 +2175,19 @@ def _register_worker_form(*, key: str, fixed_trade: str | None = None,
     sn = (stamp or "").strip()
     p1, p2 = (pin1 or "").strip(), (pin2 or "").strip()
     if not nm:
-        st.warning("Enter a name.")
+        _finish("warn", "Not registered — enter your full name, then tap Register again.")
     elif trade in ("Welder", "Both") and not sn:
-        st.warning("Welder No. is required for welders.")
-    elif not (p1.isdigit() and 4 <= len(p1) <= 6):
-        st.warning("PIN must be 4 to 6 digits.")
+        _finish("warn", f"Not registered — {nm} is a {trade.lower()}, so a Welder No. "
+                        "is required. Fill it in and tap Register again.")
+    elif not p1.isdigit():
+        _finish("warn", "Not registered — the PIN must be numbers only. "
+                        "Enter a 4 to 6 digit PIN and tap Register again.")
+    elif not 4 <= len(p1) <= 6:
+        _finish("warn", f"Not registered — your PIN is {len(p1)} digit(s). It must be "
+                        "4 to 6 digits. Enter it again and tap Register.")
     elif p1 != p2:
-        st.warning("The two PINs don't match.")
+        _finish("warn", "Not registered — the two PINs don't match. "
+                        "Type the same PIN in both boxes and tap Register again.")
     else:
         try:
             db.execute(
@@ -2171,16 +2197,15 @@ def _register_worker_form(*, key: str, fixed_trade: str | None = None,
                  "ph": phone.strip() or None, "pin": p1},
             )
             st.cache_data.clear()
-            st.session_state[msg_key] = (
-                f"Registered {nm} ({trade}). You can enter your name below now.")
             if prefill_name_key:
                 st.session_state[prefill_name_key] = nm
-            st.rerun()
+            _finish("ok", f"Registered {nm} ({trade}). You can enter your name below now.")
         except Exception as e:
             if "uq_field_workers" in str(e) or "duplicate" in str(e).lower():
-                st.error(f"{nm} is already registered as {trade}.")
+                _finish("err", f"{nm} is already registered as {trade} — no need to "
+                               "register again, just type the name below.")
             else:
-                st.error(f"Could not register: {e}")
+                _finish("err", f"Could not register: {e}")
 
 
 def _scan_history(code: str) -> None:
