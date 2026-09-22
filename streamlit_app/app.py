@@ -2113,17 +2113,27 @@ def _field_workers(trade_needed: str) -> pd.DataFrame:
 
 
 def _register_worker_form(*, key: str, fixed_trade: str | None = None,
-                          expanded_key: str | None = None) -> None:
+                          expanded_key: str | None = None,
+                          prefill_name_key: str | None = None) -> None:
     """Shared 'register a fitter / welder' form (roster page + inline on scan).
+
     expanded_key: session_state key the caller's st.expander reads for its
-    `expanded=` state. Without this, a caller wrapping the form in a plain
-    st.expander() never sees the success/error message - st.rerun() below
-    re-executes the whole page from scratch, and an expander with no
-    explicit `expanded=` state renders collapsed again on that fresh run,
-    hiding the message inside a closed box (looks like "nothing happened"
-    even though the row was saved)."""
+    `expanded=` state, so the box stays open across the rerun below instead
+    of snapping shut.
+    prefill_name_key: session_state key of a 'your name' box to pre-fill with
+    the name just registered, so the worker can carry straight on.
+
+    The success message has to survive a rerun: st.rerun() throws away
+    everything rendered in the run that called it, so an st.success() written
+    immediately before it never reaches the screen. The row saves, the form
+    clears, and nothing else changes - indistinguishable from the button
+    doing nothing. So stash the message and show it on the next run."""
     if expanded_key is not None:
         st.session_state.setdefault(expanded_key, False)
+    msg_key = f"{key}_msg"
+    done = st.session_state.pop(msg_key, None)
+    if done:
+        st.success(done)
     with st.form(key, clear_on_submit=True):
         c = st.columns(2)
         name = c[0].text_input("Full name")
@@ -2161,7 +2171,10 @@ def _register_worker_form(*, key: str, fixed_trade: str | None = None,
                  "ph": phone.strip() or None, "pin": p1},
             )
             st.cache_data.clear()
-            st.success(f"Registered {nm} ({trade}).")
+            st.session_state[msg_key] = (
+                f"Registered {nm} ({trade}). You can enter your name below now.")
+            if prefill_name_key:
+                st.session_state[prefill_name_key] = nm
             st.rerun()
         except Exception as e:
             if "uq_field_workers" in str(e) or "duplicate" in str(e).lower():
@@ -2300,7 +2313,8 @@ def page_scan() -> None:
     )
     with st.expander("➕ New fitter / welder? Register your name",
                      expanded=st.session_state.get("reg_scan_expanded", False)):
-        _register_worker_form(key="reg_scan", expanded_key="reg_scan_expanded")
+        _register_worker_form(key="reg_scan", expanded_key="reg_scan_expanded",
+                              prefill_name_key="scan_who_text")
     if allw.empty:
         st.warning("No fitter / welder registered yet — register above, then it "
                    "appears here.")
