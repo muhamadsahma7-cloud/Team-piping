@@ -108,9 +108,11 @@ _CLASSIFIED_COLS = [
     "spool_key", "wo_no", "batch_no", "material_group", "zone", "service", "line_no",
     "iso_dwg_no", "dwg_spool_no", "iso_run_no", "rev", "shop_field", "spool_type",
     "joint_no", "joint_size", "welding_type", "pwht", "fitup_date", "welding_date",
-    "fitup_inspection_date", "welding_inspection_date", "irn_date",
-    "delivery_date", "site_delivery_date", "paint_system", "paint_status",
-    "Spool Status",
+    "fitup_inspection_date", "welding_inspection_date",
+    "irn_date", "irn_report_no",
+    "delivery_order_no", "delivery_date", "site_do_no", "site_delivery_date",
+    "paint_system", "paint_status",
+    "Spool Status",   # keep last: _format_sheet() colours rows by the last column
 ]
 
 # progression order used for the Summary sheet
@@ -200,7 +202,9 @@ def build_classified_xlsx(df: pd.DataFrame) -> bytes:
 
     _pss_cols = ["spool_key", "wo_no", "batch_no", "zone", "material_group", "iso_dwg_no",
                  "line_no", "dwg_spool_no", "iso_run_no", "spool_type", "paint_system",
-                 "paint_status", "Spool Status"]
+                 "paint_status", "irn_date", "irn_report_no",
+                 "delivery_order_no", "delivery_date", "site_do_no", "site_delivery_date",
+                 "Spool Status"]
     pipe_spool_summary = df_shop.drop_duplicates(subset=["spool_key"])[
         [c for c in _pss_cols if c in df_shop.columns]
     ]
