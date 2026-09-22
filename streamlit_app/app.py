@@ -711,6 +711,12 @@ sp AS (
              AND substr(site_delivery_date,1,10) <= :asof, false))        AS delivered,
            bool_or(coalesce(irn_date ~ '{_ISO}'
              AND substr(irn_date,1,10) <= :asof, false))                  AS irn_done,
+           -- irn_done is "any joint IRN'd" and the wait_irn_* figures below
+           -- rely on that. "Got its IRN" needs EVERY joint signed off, the
+           -- same bar classify() sets (irn_date.ne('').all()), so it gets its
+           -- own flag rather than changing what irn_done means.
+           bool_and(coalesce(irn_date ~ '{_ISO}'
+             AND substr(irn_date,1,10) <= :asof, false))                  AS irn_all,
            bool_or(coalesce(delivery_date ~ '{_ISO}'
              AND substr(delivery_date,1,10) <= :asof, false))             AS to_paint,
            bool_or(upper(trim(coalesce(paint_status,''))) = 'YES')        AS needs_paint
@@ -762,6 +768,14 @@ SELECT
   (SELECT count(*) FROM sp WHERE to_paint)           AS painting_spools,
   (SELECT count(*) FROM sp WHERE welded AND NOT irn_done AND needs_paint)      AS wait_irn_paint,
   (SELECT count(*) FROM sp WHERE welded AND NOT irn_done AND NOT needs_paint)  AS wait_irn_site,
+  -- IRN signed off and still sitting in the shop. Same two queues the
+  -- Delivery tab works from, narrowed to spools whose IRN is complete:
+  -- needs paint and not sent to painting yet / due at site (already painted,
+  -- or never needed it) and not sent to site yet.
+  (SELECT count(*) FROM sp
+     WHERE irn_all AND needs_paint AND NOT to_paint AND NOT delivered)          AS irn_ready_paint,
+  (SELECT count(*) FROM sp
+     WHERE irn_all AND NOT delivered AND (to_paint OR NOT needs_paint))         AS irn_ready_site,
   (SELECT count(*) FROM sp_issued
      WHERE is_straight AND is_issued AND NOT delivered AND NOT to_paint
        AND needs_paint)                                                       AS straight_ready_paint,
@@ -904,6 +918,20 @@ def page_overview() -> None:
     b[2].metric("Total spools delivered to site", f"{dsp:,}", pct(dsp),
                 delta_color="off", border=True,
                 help="Spools with a site delivery date (site_delivery_date).")
+
+    irp = int(s["irn_ready_paint"] or 0)
+    irs = int(s["irn_ready_site"] or 0)
+    i_ = st.columns(3)
+    i_[0].metric("IRN done, ready to deliver — painting", f"{irp:,}", pct(irp),
+                delta_color="off", border=True,
+                help="Every joint IRN'd, needs painting (paint status = Yes), "
+                     "not sent to painting or site yet. Matches the Painting "
+                     "delivery worklist, limited to IRN-complete spools.")
+    i_[1].metric("IRN done, ready to deliver — site", f"{irs:,}", pct(irs),
+                delta_color="off", border=True,
+                help="Every joint IRN'd and due at site — already sent to painting, "
+                     "or no painting required — but not sent to site yet. Matches "
+                     "the Site delivery worklist, limited to IRN-complete spools.")
 
     srp = int(s["straight_ready_paint"] or 0)
     srn = int(s["straight_ready_nonpaint"] or 0)
