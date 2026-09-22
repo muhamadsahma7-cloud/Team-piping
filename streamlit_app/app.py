@@ -680,9 +680,14 @@ _IS_STRAIGHT_SQL = (
 
 _STATS_SQL = f"""
 WITH wo AS (
+    -- straight pipe counts as done for fit-up/welding: it's release-ready
+    -- without those dates, so it never sits in the outstanding balance. Keeps
+    -- wo_fitup_bal here agreeing with Work order summary's Balance Fit-Up.
     SELECT joint_size,
-           (fitup_date ~ '{_ISO}'   AND substr(fitup_date,1,10)   <= :asof) AS fu_done,
-           (welding_date ~ '{_ISO}' AND substr(welding_date,1,10) <= :asof) AS wd_done
+           ((fitup_date ~ '{_ISO}'   AND substr(fitup_date,1,10)   <= :asof)
+            OR {_IS_STRAIGHT_SQL})                                          AS fu_done,
+           ((welding_date ~ '{_ISO}' AND substr(welding_date,1,10) <= :asof)
+            OR {_IS_STRAIGHT_SQL})                                          AS wd_done
     FROM spools
     WHERE shop_field='S' AND lower(coalesce(status,''))='issued'
       AND upper(trim(coalesce(workable,'')))='Y'
@@ -765,6 +770,10 @@ SELECT
        AND NOT needs_paint)                                                   AS straight_ready_nonpaint,
   (SELECT count(*) FROM sp_issued
      WHERE is_straight AND is_issued AND delivered)                           AS straight_delivered_site,
+  -- denominator for the three straight-pipe figures. They come from
+  -- sp_issued, which has no shop filter (straight pipe can be field-run), so
+  -- showing them as a % of shop-only total_spools could read over 100%.
+  (SELECT count(*) FROM sp_issued WHERE is_straight AND is_issued)            AS straight_issued,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S')                       AS shop_di,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='F')                       AS field_di,
   (SELECT count(DISTINCT wo_no) FROM spools
@@ -899,16 +908,22 @@ def page_overview() -> None:
     srp = int(s["straight_ready_paint"] or 0)
     srn = int(s["straight_ready_nonpaint"] or 0)
     ssd = int(s["straight_delivered_site"] or 0)
+    # % of straight pipe, not of all spools: these three count field-run
+    # straight pipe too, which isn't in the shop-only total_spools, so that
+    # denominator could read over 100%. Against straight pipe they're also
+    # mutually exclusive slices, so they read as shares of one whole.
+    stot = int(s["straight_issued"] or 0)
+    spct = lambda n: (f"{n / stot * 100:.0f}% of straight pipe" if stot else None)
     c_ = st.columns(3)
-    c_[0].metric("Straight pipe ready to deliver — painting", f"{srp:,}", pct(srp),
+    c_[0].metric("Straight pipe ready to deliver — painting", f"{srp:,}", spct(srp),
                 delta_color="off", border=True,
                 help="Straight pipe (Spool type) on an issued work order, needs "
                      "painting, not yet sent to painting or site.")
-    c_[1].metric("Straight pipe ready to deliver — non-painting", f"{srn:,}", pct(srn),
+    c_[1].metric("Straight pipe ready to deliver — non-painting", f"{srn:,}", spct(srn),
                 delta_color="off", border=True,
                 help="Straight pipe (Spool type) on an issued work order, no "
                      "painting required, not yet sent to painting or site.")
-    c_[2].metric("Straight pipe delivered to site", f"{ssd:,}", pct(ssd),
+    c_[2].metric("Straight pipe delivered to site", f"{ssd:,}", spct(ssd),
                 delta_color="off", border=True,
                 help="Straight pipe (Spool type) on an issued work order, already "
                      "has a site delivery date.")
@@ -1411,14 +1426,17 @@ def page_targets() -> None:
             st.line_chart(pd.DataFrame(frame, index=idx))
 
 
-_WO_TOTALS_SQL = """
+_WO_TOTALS_SQL = f"""
 SELECT
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S')                                   AS total_db,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S' AND lower(coalesce(status,''))='issued')      AS issued,
+  -- straight pipe is release-ready without fit-up/welding dates, so it never
+  -- counts as outstanding balance - same rule as the per-WO table above, which
+  -- would otherwise disagree with these totals on the very same page
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S' AND lower(coalesce(status,''))='issued'
-     AND coalesce(trim(fitup_date),'')='')                                                                AS bal_fitup_issued,
+     AND coalesce(trim(fitup_date),'')='' AND NOT ({_IS_STRAIGHT_SQL}))                                   AS bal_fitup_issued,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S' AND lower(coalesce(status,''))='issued'
-     AND coalesce(trim(welding_date),'')='')                                                              AS bal_weld_issued,
+     AND coalesce(trim(welding_date),'')='' AND NOT ({_IS_STRAIGHT_SQL}))                                 AS bal_weld_issued,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S' AND upper(trim(coalesce(workable,'')))='Y')   AS workable,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S' AND upper(trim(coalesce(workable,'')))='N')   AS non_workable,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S' AND lower(coalesce(status,''))='unissued')    AS unissued,
