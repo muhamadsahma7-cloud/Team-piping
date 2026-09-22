@@ -669,8 +669,13 @@ _ISO = "^[0-9]{4}-[0-9]{2}-[0-9]{2}"
 # Straight pipe (Spool type) doesn't need fit-up/welding dates to be ready
 # to release. Explicit spool_type wins; blank falls back to the legacy
 # 'DWG SPOOL NO starts with SP-SPL' guess (mirrors reports._is_straight_pipe).
+# nullif(...,'') matters: coalesce only falls through on NULL, so a
+# spool_type of '' or '   ' would otherwise answer FALSE outright and skip
+# the SP-SPL fallback entirely. coalesce(...,false) keeps a NULL
+# dwg_spool_no from turning the whole expression NULL under NOT (...).
 _IS_STRAIGHT_SQL = (
-    "coalesce(upper(trim(spool_type)) LIKE 'STRAIGHT%', dwg_spool_no LIKE 'SP-SPL%')"
+    "coalesce(upper(trim(nullif(trim(spool_type),''))) LIKE 'STRAIGHT%',"
+    " dwg_spool_no LIKE 'SP-SPL%', false)"
 )
 
 _STATS_SQL = f"""
@@ -1026,7 +1031,12 @@ def page_overview() -> None:
                              AND substr(welding_date,1,10) <= :asof, false)) AS welded
                     FROM spools
                     WHERE shop_field='S'
-                    GROUP BY {", ".join(quoted_labs)}, iso_dwg_no, line_no, iso_run_no, dwg_spool_no
+                    -- group by the key EXPRESSIONS, not the output aliases:
+                    -- where an alias matches a real column name (wo_no, area,
+                    -- batch_no) Postgres resolves GROUP BY to the raw column,
+                    -- so a spool mixing NULL and '' would split in two here
+                    -- and get counted twice.
+                    GROUP BY {", ".join(keys)}, iso_dwg_no, line_no, iso_run_no, dwg_spool_no
                 )
                 SELECT {", ".join(quoted_labs)}, count(*) AS spools,
                        count(*) FILTER (WHERE welded) AS spool_done
@@ -1791,7 +1801,14 @@ def _clear_dates_ui(col: str, joints: pd.DataFrame, key: dict,
     from sqlalchemy import text as _t
     label = {"fitup_date": "fit-up date", "welding_date": "welding date",
              "irn": "IRN date / report no"}[col]
-    where_spool = f"iso_dwg_no=:i AND line_no=:l AND iso_run_no=:p AND {spool_sql}"
+    # shop_field='S' matches the scope the joints preview was built from, so a
+    # clear never reaches field-side joints the user wasn't shown.
+    where_spool = (f"shop_field='S' AND iso_dwg_no=:i AND line_no=:l "
+                   f"AND iso_run_no=:p AND {spool_sql}")
+    # Confirm/pick state is keyed per spool selection, so it can't stay armed
+    # from a previous spool and let a stray tap clear the wrong one.
+    scope = re.sub(r"\W+", "_", f"{key.get('i','')}{key.get('p','')}"
+                                f"{key.get('s') or ','.join(key.get('ss') or [])}")[-40:]
     with st.expander(f"🗑 Clear a saved {label} (entered by mistake)"):
         targets: list = []
         if col == "irn":
@@ -1815,9 +1832,10 @@ def _clear_dates_ui(col: str, joints: pd.DataFrame, key: dict,
             if not clearable:
                 st.caption("No saved dates to clear here.")
                 return
-            targets = st.multiselect("Joint no(s) to clear", clearable, key=f"clr_j_{col}")
-        ok = st.checkbox("Confirm — remove the saved value", key=f"clr_ok_{col}")
-        if not st.button("Clear", key=f"clr_btn_{col}",
+            targets = st.multiselect("Joint no(s) to clear", clearable,
+                                     key=f"clr_j_{col}_{scope}")
+        ok = st.checkbox("Confirm — remove the saved value", key=f"clr_ok_{col}_{scope}")
+        if not st.button("Clear", key=f"clr_btn_{col}_{scope}",
                          disabled=not ok or (col != "irn" and not targets)):
             return
         if col == "irn":
@@ -1920,6 +1938,10 @@ def page_update() -> None:
         spool_sql = "dwg_spool_no=:s"
         key = {"i": iso, "l": line, "p": pageno, "s": spool}
     where_spool = (f"iso_dwg_no=:i AND line_no=:l AND iso_run_no=:p AND {spool_sql}")
+    # Writes stay inside the same shop-only scope as `base`, which every
+    # picker and the joints preview use - otherwise a save would also stamp
+    # field-side joints the user was never shown.
+    write_where = f"shop_field='S' AND {where_spool}"
     info = db.query(
         f"""SELECT string_agg(DISTINCT nullif(trim(wo_no),''), ', ')      AS wo_no,
                    string_agg(DISTINCT nullif(trim(batch_no),''), ', ')    AS batch_no,
@@ -1979,7 +2001,7 @@ def page_update() -> None:
                 return
             db.execute(
                 f"""UPDATE spools SET irn_date = :d, irn_report_no = :r
-                     WHERE {where_spool}""",
+                     WHERE {write_where}""",
                 {**key, "d": irn_date_in.isoformat(), "r": irn_report.strip()},
             )
             try:
@@ -2739,6 +2761,7 @@ def page_qr_labels() -> None:
 
 def page_delivery() -> None:
     st.header("Delivery")
+    _ensure_spool_type(db._conn_name())   # the worklist reads spools.spool_type
     perm = st.session_state.get("permission", "")
 
     modes = []
@@ -2799,8 +2822,15 @@ def _delivery_worklist(kind: str) -> None:
                    coalesce(max(nullif(trim(paint_system),'')),'')        AS paint_system,
                    max(nullif(trim(delivery_date),''))                   AS painting_date,
                    coalesce(max(nullif(trim(irn_report_no),'')),'')      AS irn_report_no,
-                   count(*)                                               AS joints,
-                   round(sum(joint_size)::numeric, 2)                     AS dia_inch,
+                   -- counted over the shop side only for a fabricated spool,
+                   -- the same scope as all_welded below: its field tie-in
+                   -- joints aren't part of what's being delivered from the
+                   -- shop, so they mustn't inflate the row or the selection
+                   -- total. Straight pipe can be field-run, so it counts whole.
+                   count(*) FILTER (WHERE shop_field='S'
+                                       OR {_IS_STRAIGHT_SQL})              AS joints,
+                   round(sum(joint_size) FILTER (WHERE shop_field='S'
+                                       OR {_IS_STRAIGHT_SQL})::numeric, 2) AS dia_inch,
                    bool_or(shop_field='S')                                AS any_shop,
                    bool_or(coalesce(trim(delivery_date),'')<>'')          AS any_paint_sent,
                    bool_or(coalesce(trim(site_delivery_date),'')<>'')     AS any_site_sent,
@@ -2859,9 +2889,10 @@ def _delivery_worklist(kind: str) -> None:
                  f"**{int(picked['joints'].sum())}** joint(s)")
 
         c = st.columns(2)
-        do_no = c[0].text_input(do_label)
+        do_no = c[0].text_input(do_label, key=f"{kind}_do")
         d = c[1].date_input("Delivery date", value=date.today(), format="YYYY-MM-DD")
-        confirm = st.checkbox(f"Confirm — record {verb} for the ticked spools")
+        confirm = st.checkbox(f"Confirm — record {verb} for the ticked spools",
+                              key=f"{kind}_confirm")
         if st.button(f"Record {verb}", type="primary", disabled=not confirm):
             if picked.empty or not do_no.strip():
                 st.warning("Tick at least one spool and enter a DO no.")
@@ -2881,6 +2912,13 @@ def _delivery_worklist(kind: str) -> None:
             except Exception:
                 pass
             st.cache_data.clear()
+            # Disarm before the rerun. "Tick all", the DO box and Confirm are
+            # all keyed, so they'd otherwise come back still set - the next
+            # worklist would render with every remaining spool pre-ticked and
+            # the Record button live, one stray tap from stamping the lot.
+            for _k in (f"{kind}_all", f"{kind}_do", f"{kind}_confirm",
+                       f"{kind}_worklist"):
+                st.session_state.pop(_k, None)
             st.success(f"Recorded {verb} DO {do_no.strip()} for {len(picked)} spool(s).")
             st.rerun()
 
