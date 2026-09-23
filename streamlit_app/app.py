@@ -2129,6 +2129,7 @@ def _spool_picker(key_prefix: str, *, extra_help: str = ""):
                    coalesce(heat_no_2,'')               AS heat_no_2,
                    coalesce(root_welder_no,'')          AS root_welder_no,
                    coalesce(capping_welder_no,'')       AS capping_welder_no,
+                   coalesce(spool_type,'')              AS spool_type,
                    coalesce(wo_no,'')          AS wo_no,
                    coalesce(batch_no,'')       AS batch_no,
                    coalesce(area,'')           AS area,
@@ -2217,16 +2218,28 @@ def page_update() -> None:
     if is_irn:
         _spools_of = lambda sel: ", ".join(sorted({
             sp_lbl(p, s) for p, s in zip(sel["iso_run_no"], sel["dwg_spool_no"])}))
-        not_ready = joints[(joints.fitup_date == "") | (joints.welding_date == "")]
-        if not not_ready.empty:
-            st.caption(f"Not yet fit-up + welded: {_spools_of(not_ready)}")
+        # An IRN says the work is finished, so it needs every joint of the
+        # spool fit-up AND welded. This used to be a caption only, and the
+        # save went ahead regardless - you could IRN a spool nobody had
+        # welded. Straight pipe is exempt: it's release-ready without those
+        # dates, the same exception the rest of the app makes for it.
+        ready, blocked = [], []
+        for (p_, s_), g in joints.groupby(["iso_run_no", "dwg_spool_no"], sort=False):
+            done = bool((g.fitup_date != "").all() and (g.welding_date != "").all())
+            (ready if (done or reports._is_straight_pipe(g)) else blocked).append((p_, s_))
+        if blocked:
+            st.warning("Not fit-up + welded yet, so these can't be IRN'd: "
+                       + ", ".join(sp_lbl(p, s) for p, s in blocked))
         already = joints[joints.irn_date != ""]
         if not already.empty:
             st.caption(f"Already IRN'd: {_spools_of(already)}")
         _clear_dates_ui("irn", joints, iso=iso, line=line, jlabel=jlabel)
         irn_date_in = st.date_input("IRN Date", value=date.today(), format="DD/MM/YYYY")
         irn_report = st.text_input("IRN Report No")
-        if st.button(f"Save IRN for {len(pairs)} spool(s)", type="primary"):
+        if not ready:
+            st.info("None of the spools picked are ready for an IRN.")
+            return
+        if st.button(f"Save IRN for {len(ready)} spool(s)", type="primary"):
             if not irn_report.strip():
                 st.warning("Enter an IRN report no.")
                 return
@@ -2234,17 +2247,18 @@ def page_update() -> None:
                 f"""UPDATE spools SET irn_date = :d, irn_report_no = :r
                      WHERE {where_row}""",
                 [{"d": irn_date_in.isoformat(), "r": irn_report.strip(),
-                  "i": iso, "l": line, "p": p, "s": s} for p, s in pairs],
+                  "i": iso, "l": line, "p": p, "s": s} for p, s in ready],
             )
             try:
                 db.execute("INSERT INTO user_log (username) VALUES (:u)",
                            {"u": f"{st.session_state['user']} "
-                                 f"[irn_date/irn_report_no x{len(pairs)} spool(s)]"})
+                                 f"[irn_date/irn_report_no x{len(ready)} spool(s)]"})
             except Exception:
                 pass
             st.cache_data.clear()
-            st.success(f"Updated IRN date/report no for {len(pairs)} spool(s) "
-                       f"({len(joints)} joint(s)).")
+            st.success(f"Updated IRN date/report no for {len(ready)} spool(s)."
+                       + (f"  {len(blocked)} skipped — not fit-up + welded."
+                          if blocked else ""))
             st.rerun()
         return
 
