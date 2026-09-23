@@ -1735,11 +1735,18 @@ def page_weekly() -> None:
     for c_ in ("fitup_di", "welding_di", "fitters", "welders"):
         daily[c_] = daily[c_].astype(float)
 
+    # xOffset needs a discrete axis to band the two bars per day against - on
+    # a continuous temporal one (day:T) Vega-Lite's automatic tick placement
+    # doesn't line up with the offset bands, and at this chart's width it was
+    # drawing two ticks per day ("Mon 21  Mon 21  Tue 22  Tue 22 ...").
+    # Ordinal, with an explicit sort so Fri doesn't alphabetise before Mon.
     melt = daily.melt(id_vars="day", value_vars=["fitup_di", "welding_di"],
                       var_name="metric", value_name="di")
     melt["metric"] = melt["metric"].map({"fitup_di": "Fit-up", "welding_di": "Welding"})
+    melt["day_label"] = melt["day"].dt.strftime("%a %d")
+    day_order = daily["day"].dt.strftime("%a %d").tolist()
     chart = alt.Chart(melt).mark_bar().encode(
-        x=alt.X("day:T", title=None, axis=alt.Axis(format="%a %d")),
+        x=alt.X("day_label:O", title=None, sort=day_order),
         y=alt.Y("di:Q", title="Dia-inch"),
         xOffset="metric:N",
         color=alt.Color("metric:N", title=None,
