@@ -153,7 +153,7 @@ BRAND_HTML = (
 
 PAGE_ICONS = {
     "Overview": "📊", "Targets & plan": "🎯", "Work order summary": "📋",
-    "Weekly report": "🗓️",
+    "Weekly report": "🗓️", "Monthly report": "📅",
     "Update progress": "✏️", "QC update": "🔍", "Scan & update": "📲",
     "Field workers": "🦺",
     "QR labels": "🏷️", "Delivery": "🚚", "Spools": "🔩",
@@ -541,6 +541,7 @@ PAGE_PERMS = {
     "Targets & plan": ["Targets"],
     "Work order summary": [],
     "Weekly report": [],
+    "Monthly report": [],
     "Update progress": ["Update Fit-Up", "Update Welding", "Update IRN"],
     "QC update": ["QC Update"],
     "Scan & update": ["Field Scan", "Update Fit-Up", "Update Welding"],
@@ -1521,6 +1522,144 @@ SELECT
 """
 
 
+def _period_figures(s_: str, e_: str) -> pd.Series:
+    """Key figures for one date range (inclusive). Shared by Weekly report
+    and Monthly report so a fix to one applies to both."""
+    return db.query(
+        f"""WITH sp AS (
+              SELECT iso_dwg_no, line_no, iso_run_no, dwg_spool_no,
+                     sum(joint_size) AS di,
+                     bool_and(coalesce(welding_date ~ '{_ISO}', false))    AS welded,
+                     max(CASE WHEN welding_date ~ '{_ISO}'
+                              THEN substr(welding_date,1,10) END)          AS last_weld
+                FROM spools WHERE shop_field='S'
+               GROUP BY 1, 2, 3, 4
+            )
+            SELECT
+              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
+                 AND fitup_date ~ '{_ISO}'
+                 AND substr(fitup_date,1,10) BETWEEN :s AND :e)              AS fitup_di,
+              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
+                 AND welding_date ~ '{_ISO}'
+                 AND substr(welding_date,1,10) BETWEEN :s AND :e)            AS welding_di,
+              (SELECT count(*) FROM sp WHERE welded AND last_weld BETWEEN :s AND :e)   AS spools_done,
+              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
+                 AND site_delivery_date ~ '{_ISO}'
+                 AND substr(site_delivery_date,1,10) BETWEEN :s AND :e)      AS site_di,
+              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
+                 AND delivery_date ~ '{_ISO}'
+                 AND substr(delivery_date,1,10) BETWEEN :s AND :e)           AS paint_di,
+              (SELECT count(*) FROM spools WHERE shop_field='S' AND irn_date ~ '{_ISO}'
+                 AND substr(irn_date,1,10) BETWEEN :s AND :e)                AS irn_joints,
+              (SELECT coalesce(sum(total_fitters),0) FROM manpower_reports
+                 WHERE date BETWEEN :s AND :e)                               AS fitter_days,
+              (SELECT coalesce(sum(total_welders),0) FROM manpower_reports
+                 WHERE date BETWEEN :s AND :e)                               AS welder_days
+        """,
+        {"s": s_, "e": e_}, ttl=30,
+    ).iloc[0].astype(float)
+
+
+def _project_to_date(e_: str) -> pd.Series:
+    """Cumulative fit-up/welding vs the whole job, as at date e_ (inclusive).
+    Shared by Weekly report and Monthly report."""
+    return db.query(
+        f"""SELECT
+              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S')  AS total_di,
+              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
+                 AND fitup_date ~ '{_ISO}' AND substr(fitup_date,1,10) <= :e)        AS fitup_di,
+              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
+                 AND welding_date ~ '{_ISO}' AND substr(welding_date,1,10) <= :e)    AS welding_di
+        """,
+        {"e": e_}, ttl=60,
+    ).iloc[0].astype(float)
+
+
+def _period_group(s_: str, e_: str, dim: str, label_: str) -> pd.DataFrame:
+    """Fit-up/welding dia-inch in one date range, grouped by a spool column
+    (wo_no / batch_no / area). Shared by Weekly report and Monthly report."""
+    g = db.query(
+        f"""SELECT {dim} AS grp,
+                   coalesce(sum(CASE WHEN fitup_date ~ '{_ISO}'
+                        AND substr(fitup_date,1,10) BETWEEN :s AND :e
+                        THEN joint_size END), 0) AS fitup_di,
+                   coalesce(sum(CASE WHEN welding_date ~ '{_ISO}'
+                        AND substr(welding_date,1,10) BETWEEN :s AND :e
+                        THEN joint_size END), 0) AS welding_di
+              FROM spools WHERE shop_field='S' AND coalesce({dim},'')<>''
+             GROUP BY {dim}
+            HAVING coalesce(sum(CASE WHEN fitup_date ~ '{_ISO}'
+                        AND substr(fitup_date,1,10) BETWEEN :s AND :e
+                        THEN joint_size END), 0) > 0
+                OR coalesce(sum(CASE WHEN welding_date ~ '{_ISO}'
+                        AND substr(welding_date,1,10) BETWEEN :s AND :e
+                        THEN joint_size END), 0) > 0
+             ORDER BY grp""",
+        {"s": s_, "e": e_}, ttl=30,
+    )
+    if g.empty:
+        return g
+    return g.rename(columns={"grp": label_, "fitup_di": "Fit-up (dia-inch)",
+                             "welding_di": "Welding (dia-inch)"})
+
+
+def _period_delta(now: float, before: float, dp: int = 2, *, vs: str = "last period") -> str | None:
+    """st.metric delta vs the same figure in the previous period. Streamlit
+    reads the sign off the string for the arrow/colour, so keep the +/-."""
+    if not now and not before:
+        return None                       # nothing either period - no arrow
+    gap = now - before
+    if abs(gap) < 10 ** -dp:
+        return f"same as {vs}"
+    pc = f" ({gap / before * 100:+,.0f}%)" if before else ""
+    return f"{gap:+,.{dp}f}{pc} vs {vs}"
+
+
+def _daily_breakdown_chart(s_: str, e_: str, *, rotate: bool = False) -> pd.DataFrame:
+    """The 'Daily fit-up vs welding' bar chart + returns the underlying daily
+    DataFrame (for the on-screen table and Excel export). Shared by Weekly
+    report and Monthly report."""
+    daily = db.query(
+        f"""SELECT d::date AS day,
+                   coalesce((SELECT sum(joint_size) FROM spools
+                             WHERE shop_field='S' AND substr(fitup_date,1,10)=d::date::text), 0)   AS fitup_di,
+                   coalesce((SELECT sum(joint_size) FROM spools
+                             WHERE shop_field='S' AND substr(welding_date,1,10)=d::date::text), 0) AS welding_di,
+                   coalesce((SELECT total_fitters FROM manpower_reports WHERE date=d::date::text), 0) AS fitters,
+                   coalesce((SELECT total_welders FROM manpower_reports WHERE date=d::date::text), 0) AS welders
+              FROM generate_series(CAST(:s AS date), CAST(:e AS date), interval '1 day') d
+             ORDER BY d""",
+        {"s": s_, "e": e_}, ttl=30,
+    )
+    daily["day"] = pd.to_datetime(daily["day"])
+    for c_ in ("fitup_di", "welding_di", "fitters", "welders"):
+        daily[c_] = daily[c_].astype(float)
+
+    # xOffset needs a discrete axis to band the two bars per day against - on
+    # a continuous temporal one (day:T) Vega-Lite's automatic tick placement
+    # doesn't line up with the offset bands, and at typical chart widths it
+    # draws two ticks per day ("Mon 21  Mon 21  Tue 22  Tue 22 ..."). Ordinal,
+    # with an explicit sort so Fri doesn't alphabetise before Mon.
+    melt = daily.melt(id_vars="day", value_vars=["fitup_di", "welding_di"],
+                      var_name="metric", value_name="di")
+    melt["metric"] = melt["metric"].map({"fitup_di": "Fit-up", "welding_di": "Welding"})
+    melt["day_label"] = melt["day"].dt.strftime("%a %d")
+    day_order = daily["day"].dt.strftime("%a %d").tolist()
+    x_axis = alt.Axis(labelAngle=-60) if rotate else alt.Axis()
+    chart = alt.Chart(melt).mark_bar().encode(
+        x=alt.X("day_label:O", title=None, sort=day_order, axis=x_axis),
+        y=alt.Y("di:Q", title="Dia-inch"),
+        xOffset="metric:N",
+        color=alt.Color("metric:N", title=None,
+                        scale=alt.Scale(domain=["Fit-up", "Welding"],
+                                        range=["#5ea0ff", "#22c55e"])),
+        tooltip=[alt.Tooltip("day:T", title="Day", format="%a %d %b"),
+                 "metric:N", alt.Tooltip("di:Q", format=",.2f")],
+    ).properties(height=260, title="Daily fit-up vs welding")
+    st.altair_chart(dark_alt(chart), use_container_width=True)
+    return daily
+
+
 def page_weekly() -> None:
     st.header("🗓️ Weekly report")
     _ensure_daily_concerns(db._conn_name())
@@ -1547,56 +1686,11 @@ def page_weekly() -> None:
     if wk_end > today:
         st.caption("This week isn't finished yet — figures are partial, as of today.")
 
-    def _week_figures(s_: str, e_: str) -> pd.Series:
-        return db.query(
-            f"""WITH sp AS (
-                  SELECT iso_dwg_no, line_no, iso_run_no, dwg_spool_no,
-                         sum(joint_size) AS di,
-                         bool_and(coalesce(welding_date ~ '{_ISO}', false))    AS welded,
-                         max(CASE WHEN welding_date ~ '{_ISO}'
-                                  THEN substr(welding_date,1,10) END)          AS last_weld
-                    FROM spools WHERE shop_field='S'
-                   GROUP BY 1, 2, 3, 4
-                )
-                SELECT
-                  (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
-                     AND fitup_date ~ '{_ISO}'
-                     AND substr(fitup_date,1,10) BETWEEN :s AND :e)              AS fitup_di,
-                  (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
-                     AND welding_date ~ '{_ISO}'
-                     AND substr(welding_date,1,10) BETWEEN :s AND :e)            AS welding_di,
-                  (SELECT count(*) FROM sp WHERE welded AND last_weld BETWEEN :s AND :e)   AS spools_done,
-                  (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
-                     AND site_delivery_date ~ '{_ISO}'
-                     AND substr(site_delivery_date,1,10) BETWEEN :s AND :e)      AS site_di,
-                  (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
-                     AND delivery_date ~ '{_ISO}'
-                     AND substr(delivery_date,1,10) BETWEEN :s AND :e)           AS paint_di,
-                  (SELECT count(*) FROM spools WHERE shop_field='S' AND irn_date ~ '{_ISO}'
-                     AND substr(irn_date,1,10) BETWEEN :s AND :e)                AS irn_joints,
-                  (SELECT coalesce(sum(total_fitters),0) FROM manpower_reports
-                     WHERE date BETWEEN :s AND :e)                               AS fitter_days,
-                  (SELECT coalesce(sum(total_welders),0) FROM manpower_reports
-                     WHERE date BETWEEN :s AND :e)                               AS welder_days
-            """,
-            {"s": s_, "e": e_}, ttl=30,
-        ).iloc[0].astype(float)
-
-    kf = _week_figures(s, e)
+    kf = _period_figures(s, e)
     prev_start = wk_start - timedelta(days=7)
-    pf = _week_figures(prev_start.isoformat(), (prev_start + timedelta(days=6)).isoformat())
+    pf = _period_figures(prev_start.isoformat(), (prev_start + timedelta(days=6)).isoformat())
     partial = wk_end > today
-
-    def _d(now: float, before: float, dp: int = 2) -> str | None:
-        """st.metric delta vs the same figure last week. Streamlit reads the
-        sign off the string for the arrow and colour, so keep the leading +/-."""
-        if not now and not before:
-            return None                       # nothing either week - no arrow
-        gap = now - before
-        if abs(gap) < 10 ** -dp:
-            return "same as last week"
-        pc = f" ({gap / before * 100:+,.0f}%)" if before else ""
-        return f"{gap:+,.{dp}f}{pc} vs last week"
+    _d = lambda now, before, dp=2: _period_delta(now, before, dp, vs="last week")
 
     st.subheader("Key figures")
     st.caption(f"Arrows compare with the previous week "
@@ -1635,16 +1729,7 @@ def page_weekly() -> None:
                 border=True)
 
     # ---- project to date, as at the end of this week ----------------------
-    ptd = db.query(
-        f"""SELECT
-              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S')  AS total_di,
-              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
-                 AND fitup_date ~ '{_ISO}' AND substr(fitup_date,1,10) <= :e)        AS fitup_di,
-              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
-                 AND welding_date ~ '{_ISO}' AND substr(welding_date,1,10) <= :e)    AS welding_di
-        """,
-        {"e": e}, ttl=60,
-    ).iloc[0].astype(float)
+    ptd = _project_to_date(e)
     tot_di = float(ptd["total_di"])
     st.subheader("Project to date")
     st.caption(f"Cumulative as at {wk_end:%d %b %Y} — the week above in context of "
@@ -1719,43 +1804,7 @@ def page_weekly() -> None:
 
     # ---- daily breakdown --------------------------------------------------
     st.subheader("Daily breakdown")
-    daily = db.query(
-        f"""SELECT d::date AS day,
-                   coalesce((SELECT sum(joint_size) FROM spools
-                             WHERE shop_field='S' AND substr(fitup_date,1,10)=d::date::text), 0)   AS fitup_di,
-                   coalesce((SELECT sum(joint_size) FROM spools
-                             WHERE shop_field='S' AND substr(welding_date,1,10)=d::date::text), 0) AS welding_di,
-                   coalesce((SELECT total_fitters FROM manpower_reports WHERE date=d::date::text), 0) AS fitters,
-                   coalesce((SELECT total_welders FROM manpower_reports WHERE date=d::date::text), 0) AS welders
-              FROM generate_series(CAST(:s AS date), CAST(:e AS date), interval '1 day') d
-             ORDER BY d""",
-        {"s": s, "e": e}, ttl=30,
-    )
-    daily["day"] = pd.to_datetime(daily["day"])
-    for c_ in ("fitup_di", "welding_di", "fitters", "welders"):
-        daily[c_] = daily[c_].astype(float)
-
-    # xOffset needs a discrete axis to band the two bars per day against - on
-    # a continuous temporal one (day:T) Vega-Lite's automatic tick placement
-    # doesn't line up with the offset bands, and at this chart's width it was
-    # drawing two ticks per day ("Mon 21  Mon 21  Tue 22  Tue 22 ...").
-    # Ordinal, with an explicit sort so Fri doesn't alphabetise before Mon.
-    melt = daily.melt(id_vars="day", value_vars=["fitup_di", "welding_di"],
-                      var_name="metric", value_name="di")
-    melt["metric"] = melt["metric"].map({"fitup_di": "Fit-up", "welding_di": "Welding"})
-    melt["day_label"] = melt["day"].dt.strftime("%a %d")
-    day_order = daily["day"].dt.strftime("%a %d").tolist()
-    chart = alt.Chart(melt).mark_bar().encode(
-        x=alt.X("day_label:O", title=None, sort=day_order),
-        y=alt.Y("di:Q", title="Dia-inch"),
-        xOffset="metric:N",
-        color=alt.Color("metric:N", title=None,
-                        scale=alt.Scale(domain=["Fit-up", "Welding"],
-                                        range=["#5ea0ff", "#22c55e"])),
-        tooltip=[alt.Tooltip("day:T", title="Day", format="%a %d %b"),
-                 "metric:N", alt.Tooltip("di:Q", format=",.2f")],
-    ).properties(height=260, title="Daily fit-up vs welding")
-    st.altair_chart(dark_alt(chart), use_container_width=True)
+    daily = _daily_breakdown_chart(s, e)
 
     dv = daily.copy()
     dv["Day"] = dv["day"].dt.strftime("%a %d %b")
@@ -1766,35 +1815,10 @@ def page_weekly() -> None:
     show_table(dv, "weekly_daily")
 
     # ---- by work order / batch / area -------------------------------------
-    def _week_group(dim: str, label_: str) -> pd.DataFrame:
-        g = db.query(
-            f"""SELECT {dim} AS grp,
-                       coalesce(sum(CASE WHEN fitup_date ~ '{_ISO}'
-                            AND substr(fitup_date,1,10) BETWEEN :s AND :e
-                            THEN joint_size END), 0) AS fitup_di,
-                       coalesce(sum(CASE WHEN welding_date ~ '{_ISO}'
-                            AND substr(welding_date,1,10) BETWEEN :s AND :e
-                            THEN joint_size END), 0) AS welding_di
-                  FROM spools WHERE shop_field='S' AND coalesce({dim},'')<>''
-                 GROUP BY {dim}
-                HAVING coalesce(sum(CASE WHEN fitup_date ~ '{_ISO}'
-                            AND substr(fitup_date,1,10) BETWEEN :s AND :e
-                            THEN joint_size END), 0) > 0
-                    OR coalesce(sum(CASE WHEN welding_date ~ '{_ISO}'
-                            AND substr(welding_date,1,10) BETWEEN :s AND :e
-                            THEN joint_size END), 0) > 0
-                 ORDER BY grp""",
-            {"s": s, "e": e}, ttl=30,
-        )
-        if g.empty:
-            return g
-        return g.rename(columns={"grp": label_, "fitup_di": "Fit-up (dia-inch)",
-                                 "welding_di": "Welding (dia-inch)"})
-
     st.subheader("Activity this week — by group")
-    wo_df = _week_group("wo_no", "WO no")
-    batch_df = _week_group("batch_no", "Batch no")
-    area_df = _week_group("area", "Area")
+    wo_df = _period_group(s, e, "wo_no", "WO no")
+    batch_df = _period_group(s, e, "batch_no", "Batch no")
+    area_df = _period_group(s, e, "area", "Area")
     t1, t2, t3 = st.tabs(["By work order", "By batch", "By area"])
     for tab, df_g in ((t1, wo_df), (t2, batch_df), (t3, area_df)):
         with tab:
@@ -1858,6 +1882,242 @@ def page_weekly() -> None:
         data=reports.build_weekly_report_xlsx(label, key_rows, dv, wo_df, batch_df, area_df,
                                               concern_df),
         file_name=f"weekly_report_{wk_start.isoformat()}_{reports.stamp()}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary",
+    )
+
+
+def page_monthly() -> None:
+    st.header("📅 Monthly report")
+    _ensure_daily_concerns(db._conn_name())
+
+    cfg = db.get_settings()
+    today = date.today()
+    this_mo = today.replace(day=1)
+
+    def _month_end(mo_start: date) -> date:
+        nxt = (date(mo_start.year + 1, 1, 1) if mo_start.month == 12
+               else date(mo_start.year, mo_start.month + 1, 1))
+        return nxt - timedelta(days=1)
+
+    c = st.columns([1, 1.4, 2])
+    quick = c[0].selectbox("Month", ["This month", "Last month", "Custom"],
+                           label_visibility="collapsed")
+    if quick == "This month":
+        mo_start = this_mo
+    elif quick == "Last month":
+        mo_start = (this_mo - timedelta(days=1)).replace(day=1)
+    else:
+        picked = c[1].date_input("Any day in the month", value=this_mo,
+                                 format="DD/MM/YYYY", label_visibility="collapsed")
+        mo_start = picked.replace(day=1)
+    mo_end = _month_end(mo_start)
+    s, e = mo_start.isoformat(), mo_end.isoformat()
+    label = f"{mo_start:%B %Y}"
+    c[2].markdown(f"### {label}")
+    if mo_end > today:
+        st.caption("This month isn't finished yet — figures are partial, as of today.")
+
+    kf = _period_figures(s, e)
+    prev_start = (mo_start - timedelta(days=1)).replace(day=1)
+    prev_end = _month_end(prev_start)
+    pf = _period_figures(prev_start.isoformat(), prev_end.isoformat())
+    partial = mo_end > today
+    _d = lambda now, before, dp=2: _period_delta(now, before, dp, vs="last month")
+
+    st.subheader("Key figures")
+    st.caption(f"Arrows compare with the previous month "
+               f"({prev_start:%B %Y})."
+               + ("  This month is still running, so it's being compared against a "
+                  "full month." if partial else ""))
+    a = st.columns(4)
+    a[0].metric("Fit-up (dia-inch)", f"{kf['fitup_di']:,.2f}",
+                _d(kf["fitup_di"], pf["fitup_di"]), border=True)
+    a[1].metric("Welding (dia-inch)", f"{kf['welding_di']:,.2f}",
+                _d(kf["welding_di"], pf["welding_di"]), border=True)
+    a[2].metric("Spools completed", f"{int(kf['spools_done']):,}",
+                _d(kf["spools_done"], pf["spools_done"], 0), border=True)
+    a[3].metric("IRN'd (joints)", f"{int(kf['irn_joints']):,}",
+                _d(kf["irn_joints"], pf["irn_joints"], 0), border=True)
+    b = st.columns(4)
+    b[0].metric("Delivered to painting (dia-inch)", f"{kf['paint_di']:,.2f}",
+                _d(kf["paint_di"], pf["paint_di"]), border=True)
+    b[1].metric("Delivered to site (dia-inch)", f"{kf['site_di']:,.2f}",
+                _d(kf["site_di"], pf["site_di"]), border=True)
+    b[2].metric("Fitter man-days", f"{int(kf['fitter_days']):,}",
+                _d(kf["fitter_days"], pf["fitter_days"], 0), border=True)
+    b[3].metric("Welder man-days", f"{int(kf['welder_days']):,}",
+                _d(kf["welder_days"], pf["welder_days"], 0), border=True)
+
+    st.subheader("Productivity")
+    _rate = lambda di, days: (di / days) if days else None
+    f_now, f_prev = _rate(kf["fitup_di"], kf["fitter_days"]), _rate(pf["fitup_di"], pf["fitter_days"])
+    w_now, w_prev = _rate(kf["welding_di"], kf["welder_days"]), _rate(pf["welding_di"], pf["welder_days"])
+    p = st.columns(2)
+    p[0].metric("Dia-inch / fitter / day", f"{f_now:.2f}" if f_now is not None else "—",
+                _d(f_now, f_prev) if (f_now is not None and f_prev is not None) else None,
+                border=True)
+    p[1].metric("Dia-inch / welder / day", f"{w_now:.2f}" if w_now is not None else "—",
+                _d(w_now, w_prev) if (w_now is not None and w_prev is not None) else None,
+                border=True)
+
+    # ---- project to date, as at the end of this month ---------------------
+    ptd = _project_to_date(e)
+    tot_di = float(ptd["total_di"])
+    st.subheader("Project to date")
+    st.caption(f"Cumulative as at {mo_end:%d %b %Y} — the month above in context of "
+               "the whole job (shop dia-inch).")
+    q_ = st.columns(4)
+    q_[0].metric("Cumulative fit-up", f"{ptd['fitup_di']:,.2f}",
+                 f"{ptd['fitup_di'] / tot_di * 100:.1f}% of project" if tot_di else None,
+                 delta_color="off", border=True)
+    q_[1].metric("Cumulative welding", f"{ptd['welding_di']:,.2f}",
+                 f"{ptd['welding_di'] / tot_di * 100:.1f}% of project" if tot_di else None,
+                 delta_color="off", border=True)
+    q_[2].metric("Balance welding", f"{tot_di - ptd['welding_di']:,.2f}",
+                 delta_color="off", border=True,
+                 help="Total shop dia-inch still to weld at the end of this month.")
+    # A part-finished month makes a nonsense of this - mid-month it otherwise
+    # reads far too pessimistic, and "This month" is the default view - so
+    # while the month is still running the pace comes from the last full
+    # month instead.
+    rate_di = pf["welding_di"] if partial else kf["welding_di"]
+    rate_src = "last full month" if partial else "this month"
+    q_[3].metric(f"Months left at {rate_src}'s rate",
+                 f"{(tot_di - ptd['welding_di']) / rate_di:,.1f}" if rate_di else "—",
+                 delta_color="off", border=True,
+                 help=f"Balance welding divided by {rate_src}'s welding — how many more "
+                      "months the remaining work would take at that pace.")
+
+    # ---- plan vs actual for the month, using the Targets & plan settings --
+    plan_row = None
+    if cfg.get("plan_start") and cfg.get("target_date"):
+        plan_start = pd.to_datetime(cfg["plan_start"]).date()
+        target_date = pd.to_datetime(cfg["target_date"]).date()
+        scope = cfg.get("scope", "issued")
+        _rr = cfg.get("rest")
+        rest_s = set(int(x) for x in _rr.split(",") if x) if _rr is not None else {6}
+        hol_s, _ = _parse_dates(cfg.get("holidays") or "")
+        scope_where = ("AND lower(coalesce(status,''))='issued' "
+                       "AND upper(trim(coalesce(workable,'')))='Y'") if scope == "issued" else ""
+        scope_di = float(db.query(
+            f"SELECT coalesce(sum(joint_size),0) v FROM spools WHERE shop_field='S' {scope_where}",
+            ttl=60,
+        ).iloc[0]["v"])
+        total_wd = _wdays(plan_start, target_date, rest_s, hol_s)
+        if total_wd > 0 and mo_start <= target_date and mo_end >= plan_start:
+            planned_per_day = scope_di / total_wd
+            month_wd = _wdays(max(mo_start, plan_start), min(mo_end, target_date), rest_s, hol_s)
+            planned_month_di = planned_per_day * month_wd
+            # one plan curve, but both trades are measured against it - fit-up
+            # has to keep pace too, and reporting only welding hid a fit-up
+            # shortfall until it showed up as a welding one later.
+            plan_row = pd.DataFrame([
+                {"Metric": m,
+                 "Working days this month": month_wd,
+                 "Planned (dia-inch)": round(planned_month_di, 2),
+                 "Actual (dia-inch)": round(actual, 2),
+                 "Delta": round(actual - planned_month_di, 2),
+                 "Status": ("BEHIND" if actual - planned_month_di < -0.01
+                            else "on / ahead of plan")}
+                for m, actual in (("Fit-up", kf["fitup_di"]),
+                                  ("Welding", kf["welding_di"]))
+            ])
+    st.subheader("Plan vs actual")
+    if plan_row is not None:
+        st.dataframe(
+            plan_row.style.map(
+                lambda v: "color:#f87171;font-weight:bold" if v == "BEHIND" else "color:#34d399",
+                subset=["Status"],
+            ),
+            use_container_width=True, hide_index=True,
+            column_config=num2_cfg(plan_row),
+        )
+    else:
+        st.info("No plan covers this month — set one on **Targets & plan**.")
+
+    # ---- daily breakdown ---------------------------------------------------
+    st.subheader("Daily breakdown")
+    # up to 31 bars, so the day labels are rotated to stay legible - the
+    # 7-bar weekly chart doesn't need that.
+    daily = _daily_breakdown_chart(s, e, rotate=True)
+
+    dv = daily.copy()
+    dv["Day"] = dv["day"].dt.strftime("%a %d %b")
+    dv = dv[["Day", "fitup_di", "welding_di", "fitters", "welders"]].rename(columns={
+        "fitup_di": "Fit-up (dia-inch)", "welding_di": "Welding (dia-inch)",
+        "fitters": "Fitters", "welders": "Welders",
+    })
+    show_table(dv, "monthly_daily")
+
+    # ---- by work order / batch / area --------------------------------------
+    st.subheader("Activity this month — by group")
+    wo_df = _period_group(s, e, "wo_no", "WO no")
+    batch_df = _period_group(s, e, "batch_no", "Batch no")
+    area_df = _period_group(s, e, "area", "Area")
+    t1, t2, t3 = st.tabs(["By work order", "By batch", "By area"])
+    for tab, df_g in ((t1, wo_df), (t2, batch_df), (t3, area_df)):
+        with tab:
+            if df_g.empty:
+                st.caption("No activity this month.")
+            else:
+                st.dataframe(df_g, use_container_width=True, hide_index=True,
+                            column_config=num2_cfg(df_g))
+
+    # ---- areas of concern this month ---------------------------------------
+    st.subheader("Areas of concern this month")
+    concern_df = db.query(
+        """SELECT date AS "Date", category AS "Category", note AS "Concern",
+                  coalesce(raised_by,'') AS "Raised by"
+             FROM daily_concerns WHERE date BETWEEN :s AND :e
+            ORDER BY date, category""",
+        {"s": s, "e": e}, ttl=30,
+    )
+    if concern_df.empty:
+        st.caption("No concerns logged this month.")
+    else:
+        st.dataframe(concern_df, use_container_width=True, hide_index=True)
+        by_cat = (concern_df["Category"].value_counts()
+                  .rename_axis("Category").reset_index(name="Count"))
+        st.caption("By category: " + ", ".join(
+            f"{r['Category']} ({r['Count']})" for _, r in by_cat.iterrows()))
+
+    st.divider()
+    _vs = lambda now, before, dp=2: f"{now - before:+,.{dp}f}"
+    key_rows = [
+        ("Month", label),
+        ("Compared with", f"{prev_start:%B %Y}"),
+        ("Fit-up (dia-inch)", f"{kf['fitup_di']:,.2f}"),
+        ("  vs last month", _vs(kf["fitup_di"], pf["fitup_di"])),
+        ("Welding (dia-inch)", f"{kf['welding_di']:,.2f}"),
+        ("  vs last month", _vs(kf["welding_di"], pf["welding_di"])),
+        ("Spools completed", f"{int(kf['spools_done']):,}"),
+        ("  vs last month", _vs(kf["spools_done"], pf["spools_done"], 0)),
+        ("IRN'd (joints)", f"{int(kf['irn_joints']):,}"),
+        ("Delivered to painting (dia-inch)", f"{kf['paint_di']:,.2f}"),
+        ("Delivered to site (dia-inch)", f"{kf['site_di']:,.2f}"),
+        ("Fitter man-days", f"{int(kf['fitter_days']):,}"),
+        ("Welder man-days", f"{int(kf['welder_days']):,}"),
+        ("Concerns logged", f"{len(concern_df):,}"),
+        ("Cumulative fit-up (dia-inch)", f"{ptd['fitup_di']:,.2f}"),
+        ("Cumulative welding (dia-inch)", f"{ptd['welding_di']:,.2f}"),
+        ("Project complete (welding)",
+         f"{ptd['welding_di'] / tot_di * 100:.1f}%" if tot_di else "—"),
+        ("Balance welding (dia-inch)", f"{tot_di - ptd['welding_di']:,.2f}"),
+    ]
+    if plan_row is not None:
+        for _, r0 in plan_row.iterrows():
+            key_rows += [
+                (f"{r0['Metric']} planned this month (dia-inch)",
+                 f"{r0['Planned (dia-inch)']:,.2f}"),
+                (f"{r0['Metric']} vs plan (delta)", f"{r0['Delta']:,.2f}"),
+                (f"{r0['Metric']} status", str(r0["Status"])),
+            ]
+    st.download_button(
+        "⬇ Monthly report (.xlsx)",
+        data=reports.build_weekly_report_xlsx(label, key_rows, dv, wo_df, batch_df, area_df,
+                                              concern_df, title="MONTHLY REPORT"),
+        file_name=f"monthly_report_{mo_start.isoformat()}_{reports.stamp()}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary",
     )
@@ -4454,6 +4714,7 @@ def page_manpower() -> None:
     "Targets & plan": page_targets,
     "Work order summary": page_wo_summary,
     "Weekly report": page_weekly,
+    "Monthly report": page_monthly,
     "Update progress": page_update,
     "QC update": page_qc_update,
     "Scan & update": page_scan,

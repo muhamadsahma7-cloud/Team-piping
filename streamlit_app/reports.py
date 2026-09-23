@@ -303,9 +303,13 @@ def build_weekly_report_xlsx(
     batch: pd.DataFrame,
     area: pd.DataFrame,
     concerns: pd.DataFrame | None = None,
+    *,
+    title: str = "WEEKLY REPORT",
 ) -> bytes:
-    """Weekly report workbook: Key figures + Daily + By work order/batch/area
-    + Areas of concern."""
+    """Weekly/Monthly report workbook: Key figures + Daily + By work
+    order/batch/area + Areas of concern. title distinguishes the two on
+    the Key figures sheet; everything else about the shape is the same
+    period-over-period report, just a different date range."""
     from openpyxl import Workbook
 
     gen = f"Generated {datetime.now(MYT):%Y-%m-%d %H:%M} MYT"
@@ -313,7 +317,7 @@ def build_weekly_report_xlsx(
     wb.remove(wb.active)
 
     ws = wb.create_sheet("Key figures", 0)
-    ws.cell(1, 1, f"WEEKLY REPORT  —  {label}").font = Font(bold=True, size=14, color="1F4E79")
+    ws.cell(1, 1, f"{title}  —  {label}").font = Font(bold=True, size=14, color="1F4E79")
     ws.cell(2, 1, gen).font = Font(italic=True, size=9, color="808080")
     r = 4
     for k, v in key_rows:
