@@ -241,7 +241,11 @@ div[data-testid="stDataFrame"],div[data-testid="stTable"]{border:1px solid var(-
 .stTabs [data-baseweb="tab-list"]{gap:2px}
 .stTabs [aria-selected="true"]{color:var(--accent)!important}
 div[data-testid="stAlert"]{border-radius:10px}
-[data-testid="stProgress"]>div>div>div{background:var(--accent2)}
+/* Colour the FILL, not the track. This used to paint the track green and
+   leave the fill default blue, so the unfilled remainder read as "done" -
+   a 0% bar (Delivery, before anything ships) looked entirely complete. */
+[data-testid="stProgress"]>div>div>div{background:var(--line)}
+[data-testid="stProgress"]>div>div>div>div{background:var(--accent2)}
 hr{margin:1rem 0;border-color:var(--line)}
 /* Vega hangs its tooltip off <body>, outside Streamlit's element tree, so it
    survives a rerun that removes the chart: hover a bar on the Weekly report,
@@ -874,31 +878,47 @@ def page_overview() -> None:
         st.progress(min(pct, 1.0),
                     text=f"{label}: {val:,.2f} / {shop_di:,.2f}  ({pct*100:.1f}%)")
 
-    st.subheader("Key figures")
-    r1 = st.columns(6)
+    # Key figures, grouped. 27 tiles under one heading in rows of 6/5/5/3/3/3/3
+    # was a wall to scan - dia-inch totals, rates and spool counts all mixed
+    # together. Same tiles, same order of importance, but split by what they
+    # measure and laid out a consistent 4 across.
+    day_lbl = "Today's" if is_today else asof.isoformat()
+
+    st.subheader("Work scope (dia-inch)")
+    r1 = st.columns(4)
     r1[0].metric("Total shop dia-inch", f(s["shop_di"]), border=True)
     r1[1].metric("Total field dia-inch", f(s["field_di"]), border=True)
     r1[2].metric("Hold dia-inch", f(s["hold_di"]), border=True,
                  help="Shop joint_size where status = hold.")
-    r1[3].metric("Work order issued", f"{int(s['wo_issued'] or 0):,}", border=True)
-    r1[4].metric("WO total dia-inch", f(s["wo_total_di"]), border=True)
-    r1[5].metric("WO fit-up balance", f(s["wo_fitup_bal"]), border=True)
+    r1[3].metric("Work order issued", f"{int(s['wo_issued'] or 0):,}", border=True,
+                 help="Distinct work orders that are issued and workable.")
 
-    day_lbl = "Today's" if is_today else asof.isoformat()
-    r2 = st.columns(5)
-    r2[0].metric("WO welding balance", f(wo_welding_bal), border=True)
-    r2[1].metric(f"{day_lbl} fit-up", f(s["today_fitup"]), border=True)
-    r2[2].metric(f"{day_lbl} welding", f(s["today_welding"]), border=True)
-    r2[3].metric("Fit-up done", f(s["fitup_done"]), border=True)
-    r2[4].metric("Welding done", f(s["welding_done"]), border=True)
+    st.subheader("Work order progress (dia-inch)")
+    r2 = st.columns(4)
+    r2[0].metric("WO total dia-inch", f(s["wo_total_di"]), border=True)
+    r2[1].metric("WO fit-up balance", f(s["wo_fitup_bal"]), border=True,
+                 help="Issued, workable dia-inch with no fit-up date yet. "
+                      "Straight pipe is excluded — it's ready without one.")
+    r2[2].metric("WO welding balance", f(wo_welding_bal), border=True)
+    r2[3].metric("Current progress", f"{progress:.1f}%",
+                 delta=f"{progress - 100:.1f}% to target", delta_color="off", border=True,
+                 help="Welding done as a share of total shop dia-inch.")
 
-    r3 = st.columns(5)
-    r3[0].metric("Avg fit-up / day", f(s["avg_fitup_day"]), border=True)
-    r3[1].metric("Avg welding / day", f(s["avg_welding_day"]), border=True)
-    r3[2].metric("Avg fit-up / fitter", f(s["avg_fitup_fitter"]), border=True)
-    r3[3].metric("Avg welding / welder", f(s["avg_welding_welder"]), border=True)
-    r3[4].metric("Current progress", f"{progress:.1f}%",
-                 delta=f"{progress - 100:.1f}% to target", delta_color="off", border=True)
+    st.subheader("Output (dia-inch)")
+    r3 = st.columns(4)
+    r3[0].metric(f"{day_lbl} fit-up", f(s["today_fitup"]), border=True)
+    r3[1].metric(f"{day_lbl} welding", f(s["today_welding"]), border=True)
+    r3[2].metric("Fit-up done", f(s["fitup_done"]), border=True,
+                 help="Cumulative, up to the as-of date.")
+    r3[3].metric("Welding done", f(s["welding_done"]), border=True,
+                 help="Cumulative, up to the as-of date.")
+
+    st.subheader("Rates (dia-inch)")
+    r4 = st.columns(4)
+    r4[0].metric("Avg fit-up / day", f(s["avg_fitup_day"]), border=True)
+    r4[1].metric("Avg welding / day", f(s["avg_welding_day"]), border=True)
+    r4[2].metric("Avg fit-up / fitter", f(s["avg_fitup_fitter"]), border=True)
+    r4[3].metric("Avg welding / welder", f(s["avg_welding_welder"]), border=True)
 
     tsp = int(s["total_spools"] or 0)
     csp = int(s["completed_spools"] or 0)
@@ -906,58 +926,64 @@ def page_overview() -> None:
     wip = int(s["wait_irn_paint"] or 0)
     wis = int(s["wait_irn_site"] or 0)
     psp = int(s["painting_spools"] or 0)
+    irp = int(s["irn_ready_paint"] or 0)
+    irs = int(s["irn_ready_site"] or 0)
+    srp = int(s["straight_ready_paint"] or 0)
+    srn = int(s["straight_ready_nonpaint"] or 0)
+    ssd = int(s["straight_delivered_site"] or 0)
     pct = lambda n: (f"{n / tsp * 100:.0f}%" if tsp else None)
-    a = st.columns(3)
+    # % of straight pipe, not of all spools: the straight-pipe figures count
+    # field-run straight pipe too, which isn't in the shop-only total_spools,
+    # so that denominator could read over 100%. Against straight pipe they're
+    # also mutually exclusive slices, so they read as shares of one whole.
+    stot = int(s["straight_issued"] or 0)
+    spct = lambda n: (f"{n / stot * 100:.0f}% of straight pipe" if stot else None)
+
+    st.subheader("Spool status (count)")
+    a = st.columns(4)
     a[0].metric("Total pipe spools", f"{tsp:,}", border=True)
     a[1].metric("Total completed spools", f"{csp:,}", pct(csp),
                 delta_color="off", border=True)
-    a[2].metric("Total spool waiting for QC IRN — painting", f"{wip:,}", pct(wip),
+    a[2].metric("Waiting for QC IRN — painting", f"{wip:,}", pct(wip),
                 delta_color="off", border=True,
                 help="Welded, needs painting (paint status = Yes), no IRN yet.")
-    b = st.columns(3)
-    b[0].metric("Total spool waiting for QC IRN — site delivery", f"{wis:,}", pct(wis),
+    a[3].metric("Waiting for QC IRN — site delivery", f"{wis:,}", pct(wis),
                 delta_color="off", border=True,
                 help="Welded, no painting required (paint status ≠ Yes), no IRN yet.")
-    b[1].metric("Total spools delivered to painting shop", f"{psp:,}", pct(psp),
-                delta_color="off", border=True,
-                help="Spools with a painting delivery date (delivery_date).")
-    b[2].metric("Total spools delivered to site", f"{dsp:,}", pct(dsp),
-                delta_color="off", border=True,
-                help="Spools with a site delivery date (site_delivery_date).")
 
-    irp = int(s["irn_ready_paint"] or 0)
-    irs = int(s["irn_ready_site"] or 0)
-    i_ = st.columns(3)
-    i_[0].metric("IRN done, ready to deliver — painting", f"{irp:,}", pct(irp),
+    st.subheader("Ready to deliver (count)")
+    st.caption("Signed off and still in the shop. The first two are the Delivery "
+               "worklists limited to IRN-complete spools; straight pipe is shown "
+               "separately because it's release-ready without fit-up or welding.")
+    i_ = st.columns(4)
+    i_[0].metric("IRN done, ready — painting", f"{irp:,}", pct(irp),
                 delta_color="off", border=True,
                 help="Every joint IRN'd, needs painting (paint status = Yes), "
                      "not sent to painting or site yet. Matches the Painting "
                      "delivery worklist, limited to IRN-complete spools.")
-    i_[1].metric("IRN done, ready to deliver — site", f"{irs:,}", pct(irs),
+    i_[1].metric("IRN done, ready — site", f"{irs:,}", pct(irs),
                 delta_color="off", border=True,
                 help="Every joint IRN'd and due at site — already sent to painting, "
                      "or no painting required — but not sent to site yet. Matches "
                      "the Site delivery worklist, limited to IRN-complete spools.")
-
-    srp = int(s["straight_ready_paint"] or 0)
-    srn = int(s["straight_ready_nonpaint"] or 0)
-    ssd = int(s["straight_delivered_site"] or 0)
-    # % of straight pipe, not of all spools: these three count field-run
-    # straight pipe too, which isn't in the shop-only total_spools, so that
-    # denominator could read over 100%. Against straight pipe they're also
-    # mutually exclusive slices, so they read as shares of one whole.
-    stot = int(s["straight_issued"] or 0)
-    spct = lambda n: (f"{n / stot * 100:.0f}% of straight pipe" if stot else None)
-    c_ = st.columns(3)
-    c_[0].metric("Straight pipe ready to deliver — painting", f"{srp:,}", spct(srp),
+    i_[2].metric("Straight pipe ready — painting", f"{srp:,}", spct(srp),
                 delta_color="off", border=True,
                 help="Straight pipe (Spool type) on an issued work order, needs "
                      "painting, not yet sent to painting or site.")
-    c_[1].metric("Straight pipe ready to deliver — non-painting", f"{srn:,}", spct(srn),
+    i_[3].metric("Straight pipe ready — non-painting", f"{srn:,}", spct(srn),
                 delta_color="off", border=True,
                 help="Straight pipe (Spool type) on an issued work order, no "
                      "painting required, not yet sent to painting or site.")
-    c_[2].metric("Straight pipe delivered to site", f"{ssd:,}", spct(ssd),
+
+    st.subheader("Delivered (count)")
+    b = st.columns(4)
+    b[0].metric("Delivered to painting shop", f"{psp:,}", pct(psp),
+                delta_color="off", border=True,
+                help="Spools with a painting delivery date (delivery_date).")
+    b[1].metric("Delivered to site", f"{dsp:,}", pct(dsp),
+                delta_color="off", border=True,
+                help="Spools with a site delivery date (site_delivery_date).")
+    b[2].metric("Straight pipe delivered to site", f"{ssd:,}", spct(ssd),
                 delta_color="off", border=True,
                 help="Straight pipe (Spool type) on an issued work order, already "
                      "has a site delivery date.")
