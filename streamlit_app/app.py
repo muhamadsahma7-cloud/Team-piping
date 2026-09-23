@@ -154,7 +154,8 @@ BRAND_HTML = (
 PAGE_ICONS = {
     "Overview": "📊", "Targets & plan": "🎯", "Work order summary": "📋",
     "Weekly report": "🗓️",
-    "Update progress": "✏️", "Scan & update": "📲", "Field workers": "🦺",
+    "Update progress": "✏️", "QC update": "🔍", "Scan & update": "📲",
+    "Field workers": "🦺",
     "QR labels": "🏷️", "Delivery": "🚚", "Spools": "🔩",
     "Classify & export": "🗂️", "QC WCS": "🧾", "Inventory": "📦", "Manpower": "👷",
     "Activity": "📜", "Data admin": "🛠️", "Users": "👥",
@@ -527,7 +528,8 @@ welcome_splash()
 # user_credentials is a comma-separated list of these (or the literal 'all').
 KNOWN_TOKENS = [
     "all", "Spools", "Project Summary", "Targets", "Update Fit-Up", "Update Welding",
-    "Update IRN", "Painting Delivery", "Site Delivery", "Generate Reports", "Inventory",
+    "Update IRN", "QC Update", "Painting Delivery", "Site Delivery",
+    "Generate Reports", "Inventory",
     "Manpower Report", "QC WCS", "Field Scan",
 ]
 ADMIN = "__admin__"   # page tokens that only 'all' can satisfy
@@ -540,6 +542,7 @@ PAGE_PERMS = {
     "Work order summary": [],
     "Weekly report": [],
     "Update progress": ["Update Fit-Up", "Update Welding", "Update IRN"],
+    "QC update": ["QC Update"],
     "Scan & update": ["Field Scan", "Update Fit-Up", "Update Welding"],
     "Field workers": [ADMIN],
     "QR labels": [ADMIN],
@@ -2041,6 +2044,138 @@ def _clear_dates_ui(col: str, joints: pd.DataFrame, *, iso: str, line: str,
         st.rerun()
 
 
+_QC_BASE = "FROM spools WHERE shop_field='S'"
+
+
+def _spool_picker(key_prefix: str, *, extra_help: str = ""):
+    """ISO -> LINE -> PAGE(s) -> SPOOL(s) -> the joints under them.
+
+    Shared by Update progress and QC update so the two behave identically.
+    Returns None while the selection is incomplete, else
+    (iso, line, pages, pairs, joints, sp_lbl, jlabel, multi_spool).
+    Widget keys are prefixed so the two pages keep separate state."""
+    base = _QC_BASE
+    iso_opts = db.query(
+        f"SELECT DISTINCT iso_dwg_no {base} AND coalesce(iso_dwg_no,'')<>'' ORDER BY 1",
+        ttl=0,
+    )["iso_dwg_no"].tolist()
+    iso = st.selectbox("ISO DWG NO", [""] + iso_opts, key=f"{key_prefix}_iso")
+    if not iso:
+        return None
+
+    line_opts = db.query(
+        f"SELECT DISTINCT line_no {base} AND iso_dwg_no=:i AND coalesce(line_no,'')<>'' ORDER BY 1",
+        {"i": iso}, ttl=0,
+    )["line_no"].tolist()
+    line = st.selectbox("LINE NO", [""] + line_opts, key=f"{key_prefix}_line")
+    if not line:
+        return None
+
+    page_opts = db.query(
+        f"SELECT DISTINCT iso_run_no {base} AND iso_dwg_no=:i AND line_no=:l "
+        f"AND coalesce(iso_run_no,'')<>'' ORDER BY 1",
+        {"i": iso, "l": line}, ttl=0,
+    )["iso_run_no"].tolist()
+    pc = st.columns([4, 1])
+    all_pages = pc[1].checkbox("All pages", key=f"{key_prefix}_all_pages")
+    pages = pc[0].multiselect("PAGE NO (iso run no)", page_opts,
+                              default=page_opts if all_pages else [],
+                              disabled=all_pages, key=f"{key_prefix}_pages",
+                              help="Pick as many pages as you need — spools from "
+                                   "all of them are offered below.")
+    if all_pages:
+        pages = page_opts
+    if not pages:
+        return None
+
+    # Spool options are concrete (page, spool) pairs: the same DWG SPOOL NO can
+    # exist on more than one page, so a bare name would be ambiguous once
+    # several pages are in play.
+    sp_rows = db.query(
+        f"SELECT DISTINCT iso_run_no, dwg_spool_no {base} AND iso_dwg_no=:i AND line_no=:l "
+        f"AND iso_run_no = ANY(:pp) AND coalesce(dwg_spool_no,'')<>'' ORDER BY 1, 2",
+        {"i": iso, "l": line, "pp": pages}, ttl=0,
+    )
+    multi_page = len(pages) > 1
+    sp_lbl = lambda p, s: (f"{p} · {s}" if multi_page else str(s))
+    pair_of = {sp_lbl(r.iso_run_no, r.dwg_spool_no): (r.iso_run_no, r.dwg_spool_no)
+               for r in sp_rows.itertuples()}
+    sc_ = st.columns([4, 1])
+    all_spools = sc_[1].checkbox("All spools", key=f"{key_prefix}_all_spools")
+    picked_lbls = sc_[0].multiselect(
+        "DWG SPOOL NO", list(pair_of),
+        default=list(pair_of) if all_spools else [], disabled=all_spools,
+        key=f"{key_prefix}_spools",
+        help="Pick as many spools as you need." + extra_help)
+    if all_spools:
+        picked_lbls = list(pair_of)
+    if not picked_lbls:
+        return None
+    pairs = [pair_of[x] for x in picked_lbls]
+
+    jq = db.query(
+        f"""SELECT iso_run_no, dwg_spool_no, joint_no, joint_size,
+                   coalesce(item_1,'')         AS item_1,
+                   coalesce(sch_rating_1,'')   AS sch_rating_1,
+                   coalesce(item_2,'')         AS item_2,
+                   coalesce(sch_rating_2,'')   AS sch_rating_2,
+                   coalesce(fitup_date,'')              AS fitup_date,
+                   coalesce(welding_date,'')            AS welding_date,
+                   coalesce(irn_date,'')                AS irn_date,
+                   coalesce(irn_report_no,'')           AS irn_report_no,
+                   coalesce(fitup_inspection_date,'')   AS fitup_inspection_date,
+                   coalesce(welding_inspection_date,'') AS welding_inspection_date,
+                   coalesce(heat_no_1,'')               AS heat_no_1,
+                   coalesce(heat_no_2,'')               AS heat_no_2,
+                   coalesce(root_welder_no,'')          AS root_welder_no,
+                   coalesce(capping_welder_no,'')       AS capping_welder_no,
+                   coalesce(wo_no,'')          AS wo_no,
+                   coalesce(batch_no,'')       AS batch_no,
+                   coalesce(area,'')           AS area,
+                   coalesce(system_no,'')      AS system_no,
+                   coalesce(test_pack_no,'')   AS test_pack_no,
+                   coalesce(material_group,'') AS material_group,
+                   coalesce(status,'')         AS status
+            {base} AND iso_dwg_no=:i AND line_no=:l
+              AND iso_run_no = ANY(:pp) AND dwg_spool_no = ANY(:ss)
+            ORDER BY iso_run_no, dwg_spool_no, joint_no""",
+        {"i": iso, "l": line, "pp": pages, "ss": sorted({s for _, s in pairs})}, ttl=0,
+    )
+    # ANY(:pp) x ANY(:ss) is a cross product, so trim it back to the exact
+    # page/spool pairs that were actually ticked.
+    want = set(pairs)
+    joints = jq[[(p, s) in want
+                 for p, s in zip(jq["iso_run_no"], jq["dwg_spool_no"])]].reset_index(drop=True)
+    if joints.empty:
+        st.info("No joints for this selection.")
+        return None
+
+    _uniq = lambda c: ", ".join(sorted({x for x in joints[c] if x})) or "—"
+    st.markdown(
+        f"**WO no:** {_uniq('wo_no')} &nbsp;·&nbsp; "
+        f"**Batch:** {_uniq('batch_no')} &nbsp;·&nbsp; "
+        f"**Area:** {_uniq('area')} &nbsp;·&nbsp; "
+        f"**System:** {_uniq('system_no')} &nbsp;·&nbsp; "
+        f"**Test pack:** {_uniq('test_pack_no')} &nbsp;·&nbsp; "
+        f"**Material:** {_uniq('material_group')} &nbsp;·&nbsp; "
+        f"**Status:** {_uniq('status')} &nbsp;·&nbsp; "
+        f"**Spools:** {len(pairs)} &nbsp;·&nbsp; **Joints:** {len(joints)}"
+    )
+
+    # One joint no. can occur on several spools, so qualify it when more than
+    # one spool is in play. Joint FIRST: these become multiselect chips, which
+    # truncate at about 12 characters, and leading with the page would leave a
+    # row of identical "31 OF 60 · SPOO…" you can't tell apart.
+    multi_spool = len(pairs) > 1
+
+    def jlabel(r) -> str:
+        if multi_spool:
+            return f"{r.joint_no} · {sp_lbl(r.iso_run_no, r.dwg_spool_no)}"
+        return str(r.joint_no)
+
+    return iso, line, pages, pairs, joints, sp_lbl, jlabel, multi_spool
+
+
 def page_update() -> None:
     st.header("Update progress")
     _ensure_qr_schema(db._conn_name())
@@ -2061,116 +2196,12 @@ def page_update() -> None:
     is_irn = mode == "IRN"
     col = "fitup_date" if mode == "Fit-Up date" else "welding_date"
 
-    base = "FROM spools WHERE shop_field='S'"
-
-    iso_opts = db.query(
-        f"SELECT DISTINCT iso_dwg_no {base} AND coalesce(iso_dwg_no,'')<>'' ORDER BY 1",
-        ttl=0,
-    )["iso_dwg_no"].tolist()
-    iso = st.selectbox("ISO DWG NO", [""] + iso_opts)
-    if not iso:
+    picked = _spool_picker("upd", extra_help=(
+        "  The IRN date and report no. are applied to every joint of each."
+        if is_irn else ""))
+    if picked is None:
         return
-
-    line_opts = db.query(
-        f"SELECT DISTINCT line_no {base} AND iso_dwg_no=:i AND coalesce(line_no,'')<>'' ORDER BY 1",
-        {"i": iso}, ttl=0,
-    )["line_no"].tolist()
-    line = st.selectbox("LINE NO", [""] + line_opts)
-    if not line:
-        return
-
-    page_opts = db.query(
-        f"SELECT DISTINCT iso_run_no {base} AND iso_dwg_no=:i AND line_no=:l "
-        f"AND coalesce(iso_run_no,'')<>'' ORDER BY 1",
-        {"i": iso, "l": line}, ttl=0,
-    )["iso_run_no"].tolist()
-    pc = st.columns([4, 1])
-    all_pages = pc[1].checkbox("All pages", key="upd_all_pages")
-    pages = pc[0].multiselect("PAGE NO (iso run no)", page_opts,
-                              default=page_opts if all_pages else [],
-                              disabled=all_pages,
-                              help="Pick as many pages as you need — spools from "
-                                   "all of them are offered below.")
-    if all_pages:
-        pages = page_opts
-    if not pages:
-        return
-
-    # Spool options are concrete (page, spool) pairs: the same DWG SPOOL NO can
-    # exist on more than one page, so a bare name would be ambiguous once
-    # several pages are in play.
-    sp_rows = db.query(
-        f"SELECT DISTINCT iso_run_no, dwg_spool_no {base} AND iso_dwg_no=:i AND line_no=:l "
-        f"AND iso_run_no = ANY(:pp) AND coalesce(dwg_spool_no,'')<>'' ORDER BY 1, 2",
-        {"i": iso, "l": line, "pp": pages}, ttl=0,
-    )
-    multi_page = len(pages) > 1
-    sp_lbl = lambda p, s: (f"{p} · {s}" if multi_page else str(s))
-    pair_of = {sp_lbl(r.iso_run_no, r.dwg_spool_no): (r.iso_run_no, r.dwg_spool_no)
-               for r in sp_rows.itertuples()}
-    sc_ = st.columns([4, 1])
-    all_spools = sc_[1].checkbox("All spools", key="upd_all_spools")
-    picked_lbls = sc_[0].multiselect(
-        "DWG SPOOL NO", list(pair_of),
-        default=list(pair_of) if all_spools else [], disabled=all_spools,
-        help="Pick as many spools as you need."
-             + ("  The IRN date and report no. are applied to every joint of each."
-                if is_irn else ""))
-    if all_spools:
-        picked_lbls = list(pair_of)
-    if not picked_lbls:
-        return
-    pairs = [pair_of[x] for x in picked_lbls]
-
-    jq = db.query(
-        f"""SELECT iso_run_no, dwg_spool_no, joint_no, joint_size,
-                   item_1, sch_rating_1, item_2, sch_rating_2,
-                   coalesce(fitup_date,'')     AS fitup_date,
-                   coalesce(welding_date,'')   AS welding_date,
-                   coalesce(irn_date,'')       AS irn_date,
-                   coalesce(irn_report_no,'')  AS irn_report_no,
-                   coalesce(wo_no,'')          AS wo_no,
-                   coalesce(batch_no,'')       AS batch_no,
-                   coalesce(area,'')           AS area,
-                   coalesce(system_no,'')      AS system_no,
-                   coalesce(test_pack_no,'')   AS test_pack_no,
-                   coalesce(material_group,'') AS material_group,
-                   coalesce(status,'')         AS status
-            {base} AND iso_dwg_no=:i AND line_no=:l
-              AND iso_run_no = ANY(:pp) AND dwg_spool_no = ANY(:ss)
-            ORDER BY iso_run_no, dwg_spool_no, joint_no""",
-        {"i": iso, "l": line, "pp": pages, "ss": sorted({s for _, s in pairs})}, ttl=0,
-    )
-    # ANY(:pp) x ANY(:ss) is a cross product, so trim it back to the exact
-    # page/spool pairs that were actually ticked.
-    want = set(pairs)
-    joints = jq[[(p, s) in want
-                 for p, s in zip(jq["iso_run_no"], jq["dwg_spool_no"])]].reset_index(drop=True)
-    if joints.empty:
-        st.info("No joints for this selection.")
-        return
-
-    _uniq = lambda c: ", ".join(sorted({x for x in joints[c] if x})) or "—"
-    st.markdown(
-        f"**WO no:** {_uniq('wo_no')} &nbsp;·&nbsp; "
-        f"**Batch:** {_uniq('batch_no')} &nbsp;·&nbsp; "
-        f"**Area:** {_uniq('area')} &nbsp;·&nbsp; "
-        f"**System:** {_uniq('system_no')} &nbsp;·&nbsp; "
-        f"**Test pack:** {_uniq('test_pack_no')} &nbsp;·&nbsp; "
-        f"**Material:** {_uniq('material_group')} &nbsp;·&nbsp; "
-        f"**Status:** {_uniq('status')} &nbsp;·&nbsp; "
-        f"**Spools:** {len(pairs)} &nbsp;·&nbsp; **Joints:** {len(joints)}"
-    )
-
-    # One joint no. can occur on several spools, so qualify it when more than
-    # one spool is in play. Joint FIRST: these become multiselect chips, which
-    # truncate at about 12 characters, and leading with the page would leave a
-    # row of identical "31 OF 60 · SPOO…" you can't tell apart.
-    multi_spool = len(pairs) > 1
-    def jlabel(r) -> str:
-        if multi_spool:
-            return f"{r.joint_no} · {sp_lbl(r.iso_run_no, r.dwg_spool_no)}"
-        return str(r.joint_no)
+    iso, line, pages, pairs, joints, sp_lbl, jlabel, multi_spool = picked
 
     _show = ["iso_run_no", "dwg_spool_no"] if multi_spool else []
     _show += ["joint_no", "joint_size", "item_1", "sch_rating_1", "item_2",
@@ -2261,6 +2292,121 @@ def page_update() -> None:
         st.cache_data.clear()
         st.success(f"Updated {col} for {len(rows)} joint(s) across "
                    f"{len({(p, s) for p, s, _ in rows})} spool(s).")
+        st.rerun()
+
+
+# QC entry is per JOINT, not per spool: heat numbers and welder stencils
+# differ joint to joint, so unlike Update progress (one date, many joints)
+# this is an editable grid. The inspection date IS usually one value for the
+# lot, so it gets a "fill the column" helper above the table.
+_QC_GROUPS = {
+    "Fit-up inspection": [
+        ("fitup_inspection_date", "Fit-up insp. date", "date"),
+        ("heat_no_1", "Heat no. 1  (Item 1)", "text"),
+        ("heat_no_2", "Heat no. 2  (Item 2)", "text"),
+    ],
+    "Welding inspection": [
+        ("welding_inspection_date", "Welding insp. date", "date"),
+        ("root_welder_no", "Root welder no.", "text"),
+        ("capping_welder_no", "Capping welder no.", "text"),
+    ],
+}
+
+
+def page_qc_update() -> None:
+    st.header("🔍 QC update")
+    perm = st.session_state.get("permission", "")
+    if not (perm == "all" or "QC Update" in perm):
+        st.warning("Needs the 'QC Update' permission.")
+        return
+    st.caption("QC sign-off per joint. Pick the spools, fill the grid, save. "
+               "Fit-up / welding **progress** dates live on Update progress — "
+               "these are the **inspection** ones.")
+
+    group = st.radio("What to update", list(_QC_GROUPS), horizontal=True)
+    fields = _QC_GROUPS[group]
+    date_col = fields[0][0]
+
+    picked = _spool_picker("qc")
+    if picked is None:
+        return
+    iso, line, pages, pairs, joints, sp_lbl, jlabel, multi_spool = picked
+
+    # the progress date this inspection follows - inspecting a joint that was
+    # never fitted up / welded is almost always the wrong row
+    prereq = "fitup_date" if group == "Fit-up inspection" else "welding_date"
+    missing = joints[joints[prereq] == ""]
+    if not missing.empty:
+        st.caption(f"No {prereq.replace('_', ' ')} yet on "
+                   f"{len(missing)} joint(s): "
+                   + ", ".join(jlabel(r) for r in missing.itertuples())[:300])
+
+    ident = (["iso_run_no", "dwg_spool_no"] if multi_spool else []) + ["joint_no"]
+    ctx = ["item_1", "sch_rating_1", "item_2", "sch_rating_2"]
+    cols = [c for c, _, _ in fields]
+    grid = joints[ident + ctx + cols].copy()
+
+    fill = st.columns([1, 1, 3])
+    fill_date = fill[0].date_input(f"Set {fields[0][1]}", value=date.today(),
+                                   format="DD/MM/YYYY", key="qc_fill_date")
+    if fill[1].button("Fill the column", key="qc_fill_btn",
+                      help="Writes that date into every row below. Nothing is "
+                           "saved until you press Save."):
+        st.session_state["qc_fill"] = fill_date.isoformat()
+    if st.session_state.get("qc_fill"):
+        grid[date_col] = st.session_state["qc_fill"]
+
+    labels = {c: lbl for c, lbl, _ in fields}
+    labels |= {"iso_run_no": "Page", "dwg_spool_no": "Spool", "joint_no": "Joint",
+               "item_1": "Item 1", "sch_rating_1": "Sch 1",
+               "item_2": "Item 2", "sch_rating_2": "Sch 2"}
+    edited = st.data_editor(
+        grid, hide_index=True, use_container_width=True, key="qc_grid",
+        disabled=ident + ctx,
+        column_config={c: st.column_config.TextColumn(
+            labels[c], help=("YYYY-MM-DD" if kind == "date" else None))
+            for c, _, kind in fields} | {
+            c: st.column_config.TextColumn(labels[c]) for c in ident + ctx},
+    )
+
+    bad = [f"{labels[c]} on {grid.iloc[i]['joint_no']}"
+           for c, _, kind in fields if kind == "date"
+           for i, v in enumerate(edited[c])
+           if str(v).strip() and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(v).strip())]
+    if bad:
+        st.warning("Dates must be YYYY-MM-DD — fix: " + ", ".join(bad[:6]))
+
+    # only write cells that actually changed
+    changed = []
+    for i in range(len(grid)):
+        diff = {c: str(edited.iloc[i][c] or "").strip() for c, _, _ in fields
+                if str(edited.iloc[i][c] or "").strip() != str(grid.iloc[i][c] or "").strip()}
+        if diff:
+            r = joints.iloc[i]
+            changed.append((r["iso_run_no"], r["dwg_spool_no"], r["joint_no"], diff))
+
+    st.caption(f"{len(changed)} joint(s) edited.")
+    if st.button(f"Save {group.lower()} for {len(changed)} joint(s)",
+                 type="primary", disabled=not changed or bool(bad)):
+        for p_, s_, j_, diff in changed:
+            sets = ", ".join(f"{c} = :{c}" for c in diff)
+            db.execute(
+                f"""UPDATE spools SET {sets}
+                     WHERE shop_field='S' AND iso_dwg_no=:i AND line_no=:l
+                       AND iso_run_no=:p AND dwg_spool_no=:s AND joint_no=:j""",
+                {**{c: (v or None) for c, v in diff.items()},
+                 "i": iso, "l": line, "p": p_, "s": s_, "j": j_},
+            )
+        try:
+            db.execute("INSERT INTO user_log (username) VALUES (:u)",
+                       {"u": f"{st.session_state['user']} [QC {group} "
+                             f"x{len(changed)} joint(s)]"})
+        except Exception:
+            pass
+        st.session_state.pop("qc_fill", None)
+        st.session_state.pop("qc_grid", None)
+        st.cache_data.clear()
+        st.success(f"Saved {group.lower()} for {len(changed)} joint(s).")
         st.rerun()
 
 
@@ -3738,6 +3884,7 @@ GATED_TABS = {
     "Update progress": {"Fit-Up updates": "Update Fit-Up",
                         "Welding updates": "Update Welding",
                         "IRN updates": "Update IRN"},
+    "QC update": {"QC inspection entry": "QC Update"},
     "Scan & update (QR)": {"Shop-floor QR scan (this tab only)": "Field Scan"},
     "Delivery": {"Painting delivery": "Painting Delivery",
                  "Site delivery": "Site Delivery"},
@@ -4248,6 +4395,7 @@ def page_manpower() -> None:
     "Work order summary": page_wo_summary,
     "Weekly report": page_weekly,
     "Update progress": page_update,
+    "QC update": page_qc_update,
     "Scan & update": page_scan,
     "Field workers": page_field_workers,
     "QR labels": page_qr_labels,
