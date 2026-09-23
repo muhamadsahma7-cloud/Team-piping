@@ -243,6 +243,12 @@ div[data-testid="stDataFrame"],div[data-testid="stTable"]{border:1px solid var(-
 div[data-testid="stAlert"]{border-radius:10px}
 [data-testid="stProgress"]>div>div>div{background:var(--accent2)}
 hr{margin:1rem 0;border-color:var(--line)}
+/* Vega hangs its tooltip off <body>, outside Streamlit's element tree, so it
+   survives a rerun that removes the chart: hover a bar on the Weekly report,
+   sign out, and the tooltip is left stranded on the empty login screen
+   ("Day | Mon 21 Sep | metric | Welding | di | 236.00"). No chart on the page
+   means any tooltip still up is stale, so hide it. */
+body:not(:has(.vega-embed)) #vg-tooltip-element{display:none!important}
 """
 
 
