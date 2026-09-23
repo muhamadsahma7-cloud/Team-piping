@@ -1512,60 +1512,128 @@ def page_weekly() -> None:
     if wk_end > today:
         st.caption("This week isn't finished yet — figures are partial, as of today.")
 
-    kf = db.query(
-        f"""WITH sp AS (
-              SELECT iso_dwg_no, line_no, iso_run_no, dwg_spool_no,
-                     sum(joint_size) AS di,
-                     bool_and(coalesce(welding_date ~ '{_ISO}', false))    AS welded,
-                     max(CASE WHEN welding_date ~ '{_ISO}'
-                              THEN substr(welding_date,1,10) END)          AS last_weld
-                FROM spools WHERE shop_field='S'
-               GROUP BY 1, 2, 3, 4
-            )
-            SELECT
-              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
-                 AND fitup_date ~ '{_ISO}'
-                 AND substr(fitup_date,1,10) BETWEEN :s AND :e)              AS fitup_di,
-              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
-                 AND welding_date ~ '{_ISO}'
-                 AND substr(welding_date,1,10) BETWEEN :s AND :e)            AS welding_di,
-              (SELECT count(*) FROM sp WHERE welded AND last_weld BETWEEN :s AND :e)   AS spools_done,
-              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
-                 AND site_delivery_date ~ '{_ISO}'
-                 AND substr(site_delivery_date,1,10) BETWEEN :s AND :e)      AS site_di,
-              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
-                 AND delivery_date ~ '{_ISO}'
-                 AND substr(delivery_date,1,10) BETWEEN :s AND :e)           AS paint_di,
-              (SELECT count(*) FROM spools WHERE shop_field='S' AND irn_date ~ '{_ISO}'
-                 AND substr(irn_date,1,10) BETWEEN :s AND :e)                AS irn_joints,
-              (SELECT coalesce(sum(total_fitters),0) FROM manpower_reports
-                 WHERE date BETWEEN :s AND :e)                               AS fitter_days,
-              (SELECT coalesce(sum(total_welders),0) FROM manpower_reports
-                 WHERE date BETWEEN :s AND :e)                               AS welder_days
-        """,
-        {"s": s, "e": e}, ttl=30,
-    ).iloc[0].astype(float)
+    def _week_figures(s_: str, e_: str) -> pd.Series:
+        return db.query(
+            f"""WITH sp AS (
+                  SELECT iso_dwg_no, line_no, iso_run_no, dwg_spool_no,
+                         sum(joint_size) AS di,
+                         bool_and(coalesce(welding_date ~ '{_ISO}', false))    AS welded,
+                         max(CASE WHEN welding_date ~ '{_ISO}'
+                                  THEN substr(welding_date,1,10) END)          AS last_weld
+                    FROM spools WHERE shop_field='S'
+                   GROUP BY 1, 2, 3, 4
+                )
+                SELECT
+                  (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
+                     AND fitup_date ~ '{_ISO}'
+                     AND substr(fitup_date,1,10) BETWEEN :s AND :e)              AS fitup_di,
+                  (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
+                     AND welding_date ~ '{_ISO}'
+                     AND substr(welding_date,1,10) BETWEEN :s AND :e)            AS welding_di,
+                  (SELECT count(*) FROM sp WHERE welded AND last_weld BETWEEN :s AND :e)   AS spools_done,
+                  (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
+                     AND site_delivery_date ~ '{_ISO}'
+                     AND substr(site_delivery_date,1,10) BETWEEN :s AND :e)      AS site_di,
+                  (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
+                     AND delivery_date ~ '{_ISO}'
+                     AND substr(delivery_date,1,10) BETWEEN :s AND :e)           AS paint_di,
+                  (SELECT count(*) FROM spools WHERE shop_field='S' AND irn_date ~ '{_ISO}'
+                     AND substr(irn_date,1,10) BETWEEN :s AND :e)                AS irn_joints,
+                  (SELECT coalesce(sum(total_fitters),0) FROM manpower_reports
+                     WHERE date BETWEEN :s AND :e)                               AS fitter_days,
+                  (SELECT coalesce(sum(total_welders),0) FROM manpower_reports
+                     WHERE date BETWEEN :s AND :e)                               AS welder_days
+            """,
+            {"s": s_, "e": e_}, ttl=30,
+        ).iloc[0].astype(float)
+
+    kf = _week_figures(s, e)
+    prev_start = wk_start - timedelta(days=7)
+    pf = _week_figures(prev_start.isoformat(), (prev_start + timedelta(days=6)).isoformat())
+    partial = wk_end > today
+
+    def _d(now: float, before: float, dp: int = 2) -> str | None:
+        """st.metric delta vs the same figure last week. Streamlit reads the
+        sign off the string for the arrow and colour, so keep the leading +/-."""
+        if not now and not before:
+            return None                       # nothing either week - no arrow
+        gap = now - before
+        if abs(gap) < 10 ** -dp:
+            return "same as last week"
+        pc = f" ({gap / before * 100:+,.0f}%)" if before else ""
+        return f"{gap:+,.{dp}f}{pc} vs last week"
 
     st.subheader("Key figures")
+    st.caption(f"Arrows compare with the previous week "
+               f"({prev_start:%d %b} – {prev_start + timedelta(days=6):%d %b})."
+               + ("  This week is still running, so it's being compared against a "
+                  "full week." if partial else ""))
     a = st.columns(4)
-    a[0].metric("Fit-up (dia-inch)", f"{kf['fitup_di']:,.2f}", border=True)
-    a[1].metric("Welding (dia-inch)", f"{kf['welding_di']:,.2f}", border=True)
-    a[2].metric("Spools completed", f"{int(kf['spools_done']):,}", border=True)
-    a[3].metric("IRN'd (joints)", f"{int(kf['irn_joints']):,}", border=True)
+    a[0].metric("Fit-up (dia-inch)", f"{kf['fitup_di']:,.2f}",
+                _d(kf["fitup_di"], pf["fitup_di"]), border=True)
+    a[1].metric("Welding (dia-inch)", f"{kf['welding_di']:,.2f}",
+                _d(kf["welding_di"], pf["welding_di"]), border=True)
+    a[2].metric("Spools completed", f"{int(kf['spools_done']):,}",
+                _d(kf["spools_done"], pf["spools_done"], 0), border=True)
+    a[3].metric("IRN'd (joints)", f"{int(kf['irn_joints']):,}",
+                _d(kf["irn_joints"], pf["irn_joints"], 0), border=True)
     b = st.columns(4)
-    b[0].metric("Delivered to painting (dia-inch)", f"{kf['paint_di']:,.2f}", border=True)
-    b[1].metric("Delivered to site (dia-inch)", f"{kf['site_di']:,.2f}", border=True)
-    b[2].metric("Fitter man-days", f"{int(kf['fitter_days']):,}", border=True)
-    b[3].metric("Welder man-days", f"{int(kf['welder_days']):,}", border=True)
+    b[0].metric("Delivered to painting (dia-inch)", f"{kf['paint_di']:,.2f}",
+                _d(kf["paint_di"], pf["paint_di"]), border=True)
+    b[1].metric("Delivered to site (dia-inch)", f"{kf['site_di']:,.2f}",
+                _d(kf["site_di"], pf["site_di"]), border=True)
+    b[2].metric("Fitter man-days", f"{int(kf['fitter_days']):,}",
+                _d(kf["fitter_days"], pf["fitter_days"], 0), border=True)
+    b[3].metric("Welder man-days", f"{int(kf['welder_days']):,}",
+                _d(kf["welder_days"], pf["welder_days"], 0), border=True)
 
     st.subheader("Productivity")
+    _rate = lambda di, days: (di / days) if days else None
+    f_now, f_prev = _rate(kf["fitup_di"], kf["fitter_days"]), _rate(pf["fitup_di"], pf["fitter_days"])
+    w_now, w_prev = _rate(kf["welding_di"], kf["welder_days"]), _rate(pf["welding_di"], pf["welder_days"])
     p = st.columns(2)
-    p[0].metric("Dia-inch / fitter / day",
-               f"{kf['fitup_di']/kf['fitter_days']:.2f}" if kf["fitter_days"] else "—",
-               border=True)
-    p[1].metric("Dia-inch / welder / day",
-               f"{kf['welding_di']/kf['welder_days']:.2f}" if kf["welder_days"] else "—",
-               border=True)
+    p[0].metric("Dia-inch / fitter / day", f"{f_now:.2f}" if f_now is not None else "—",
+                _d(f_now, f_prev) if (f_now is not None and f_prev is not None) else None,
+                border=True)
+    p[1].metric("Dia-inch / welder / day", f"{w_now:.2f}" if w_now is not None else "—",
+                _d(w_now, w_prev) if (w_now is not None and w_prev is not None) else None,
+                border=True)
+
+    # ---- project to date, as at the end of this week ----------------------
+    ptd = db.query(
+        f"""SELECT
+              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S')  AS total_di,
+              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
+                 AND fitup_date ~ '{_ISO}' AND substr(fitup_date,1,10) <= :e)        AS fitup_di,
+              (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
+                 AND welding_date ~ '{_ISO}' AND substr(welding_date,1,10) <= :e)    AS welding_di
+        """,
+        {"e": e}, ttl=60,
+    ).iloc[0].astype(float)
+    tot_di = float(ptd["total_di"])
+    st.subheader("Project to date")
+    st.caption(f"Cumulative as at {wk_end:%d %b %Y} — the week above in context of "
+               "the whole job (shop dia-inch).")
+    q_ = st.columns(4)
+    q_[0].metric("Cumulative fit-up", f"{ptd['fitup_di']:,.2f}",
+                 f"{ptd['fitup_di'] / tot_di * 100:.1f}% of project" if tot_di else None,
+                 delta_color="off", border=True)
+    q_[1].metric("Cumulative welding", f"{ptd['welding_di']:,.2f}",
+                 f"{ptd['welding_di'] / tot_di * 100:.1f}% of project" if tot_di else None,
+                 delta_color="off", border=True)
+    q_[2].metric("Balance welding", f"{tot_di - ptd['welding_di']:,.2f}",
+                 delta_color="off", border=True,
+                 help="Total shop dia-inch still to weld at the end of this week.")
+    # A part-finished week makes a nonsense of this - mid-week it reads far too
+    # pessimistic, and "This week" is the default view - so while the week is
+    # still running the pace comes from the last full week instead.
+    rate_di = pf["welding_di"] if partial else kf["welding_di"]
+    rate_src = "last full week" if partial else "this week"
+    q_[3].metric(f"Weeks left at {rate_src}'s rate",
+                 f"{(tot_di - ptd['welding_di']) / rate_di:,.1f}" if rate_di else "—",
+                 delta_color="off", border=True,
+                 help=f"Balance welding divided by {rate_src}'s welding — how many more "
+                      "weeks the remaining work would take at that pace.")
 
     # ---- plan vs actual for the week, using the Targets & plan settings ----
     plan_row = None
@@ -1587,14 +1655,20 @@ def page_weekly() -> None:
             planned_per_day = scope_di / total_wd
             week_wd = _wdays(max(wk_start, plan_start), min(wk_end, target_date), rest_s, hol_s)
             planned_week_di = planned_per_day * week_wd
-            delta = kf["welding_di"] - planned_week_di
-            plan_row = pd.DataFrame([{
-                "Working days this week": week_wd,
-                "Planned (dia-inch)": round(planned_week_di, 2),
-                "Actual welding (dia-inch)": round(kf["welding_di"], 2),
-                "Delta": round(delta, 2),
-                "Status": "BEHIND" if delta < -0.01 else "on / ahead of plan",
-            }])
+            # one plan curve, but both trades are measured against it - fit-up
+            # has to keep pace too, and reporting only welding hid a fit-up
+            # shortfall until it showed up as a welding one a week later.
+            plan_row = pd.DataFrame([
+                {"Metric": m,
+                 "Working days this week": week_wd,
+                 "Planned (dia-inch)": round(planned_week_di, 2),
+                 "Actual (dia-inch)": round(actual, 2),
+                 "Delta": round(actual - planned_week_di, 2),
+                 "Status": ("BEHIND" if actual - planned_week_di < -0.01
+                            else "on / ahead of plan")}
+                for m, actual in (("Fit-up", kf["fitup_di"]),
+                                  ("Welding", kf["welding_di"]))
+            ])
     st.subheader("Plan vs actual")
     if plan_row is not None:
         st.dataframe(
@@ -1603,6 +1677,7 @@ def page_weekly() -> None:
                 subset=["Status"],
             ),
             use_container_width=True, hide_index=True,
+            column_config=num2_cfg(plan_row),   # else the dia-inch read 2846.670000
         )
     else:
         st.info("No plan covers this week — set one on **Targets & plan**.")
@@ -1706,24 +1781,36 @@ def page_weekly() -> None:
             f"{r['Category']} ({r['Count']})" for _, r in by_cat.iterrows()))
 
     st.divider()
+    _vs = lambda now, before, dp=2: f"{now - before:+,.{dp}f}"
     key_rows = [
+        ("Week", label),
+        ("Compared with", f"{prev_start:%d %b} – {prev_start + timedelta(days=6):%d %b %Y}"),
         ("Fit-up (dia-inch)", f"{kf['fitup_di']:,.2f}"),
+        ("  vs last week", _vs(kf["fitup_di"], pf["fitup_di"])),
         ("Welding (dia-inch)", f"{kf['welding_di']:,.2f}"),
+        ("  vs last week", _vs(kf["welding_di"], pf["welding_di"])),
         ("Spools completed", f"{int(kf['spools_done']):,}"),
+        ("  vs last week", _vs(kf["spools_done"], pf["spools_done"], 0)),
         ("IRN'd (joints)", f"{int(kf['irn_joints']):,}"),
         ("Delivered to painting (dia-inch)", f"{kf['paint_di']:,.2f}"),
         ("Delivered to site (dia-inch)", f"{kf['site_di']:,.2f}"),
         ("Fitter man-days", f"{int(kf['fitter_days']):,}"),
         ("Welder man-days", f"{int(kf['welder_days']):,}"),
         ("Concerns logged", f"{len(concern_df):,}"),
+        ("Cumulative fit-up (dia-inch)", f"{ptd['fitup_di']:,.2f}"),
+        ("Cumulative welding (dia-inch)", f"{ptd['welding_di']:,.2f}"),
+        ("Project complete (welding)",
+         f"{ptd['welding_di'] / tot_di * 100:.1f}%" if tot_di else "—"),
+        ("Balance welding (dia-inch)", f"{tot_di - ptd['welding_di']:,.2f}"),
     ]
     if plan_row is not None:
-        r0 = plan_row.iloc[0]
-        key_rows += [
-            ("Planned this week (dia-inch)", f"{r0['Planned (dia-inch)']:,.2f}"),
-            ("Actual welding vs plan (delta)", f"{r0['Delta']:,.2f}"),
-            ("Status", str(r0["Status"])),
-        ]
+        for _, r0 in plan_row.iterrows():
+            key_rows += [
+                (f"{r0['Metric']} planned this week (dia-inch)",
+                 f"{r0['Planned (dia-inch)']:,.2f}"),
+                (f"{r0['Metric']} vs plan (delta)", f"{r0['Delta']:,.2f}"),
+                (f"{r0['Metric']} status", str(r0["Status"])),
+            ]
     st.download_button(
         "⬇ Weekly report (.xlsx)",
         data=reports.build_weekly_report_xlsx(label, key_rows, dv, wo_df, batch_df, area_df,
