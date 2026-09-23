@@ -108,6 +108,8 @@ create table if not exists public.spools (
     welding_date             text,
     fitup_by                 text,               -- fitter name (QR scan)
     welding_by               text,               -- welder name (QR scan)
+    fitup_insp_by            text,               -- QC name, fit-up insp. (QR scan)
+    welding_insp_by          text,               -- QC name, welding insp. (QR scan)
     delivery_order_no        text,
     delivery_date            text,
     site_do_no               text,
@@ -283,6 +285,8 @@ alter table public.spools add column if not exists qr_id text;
 alter table public.spools add column if not exists fitup_by text;    -- fitter name
 alter table public.spools add column if not exists welding_by text;  -- welder name
 alter table public.spools add column if not exists welder_no text;   -- welder's stencil no
+alter table public.spools add column if not exists fitup_insp_by text;    -- QC name
+alter table public.spools add column if not exists welding_insp_by text;  -- QC name
 alter table public.spools add column if not exists spool_type text;  -- Straight Pipe | Fabricated Spool
 drop index if exists public.uq_spools_qr_id;
 create index if not exists idx_spools_qr_id on public.spools (qr_id);
@@ -305,7 +309,8 @@ create table if not exists public.field_updates (
     spool_id     bigint not null,             -- soft link (Excel re-import TRUNCATEs spools)
     qr_id        text,                         -- spool code, stable across re-imports
     joint_no     text,
-    activity     text not null check (activity in ('Fit-Up', 'Welding')),
+    activity     text not null check (activity in ('Fit-Up', 'Welding',
+                                 'Fit-Up inspection', 'Welding inspection')),
     work_date    text not null,
     worker_id    bigint references public.field_workers (id),
     worker_name  text,

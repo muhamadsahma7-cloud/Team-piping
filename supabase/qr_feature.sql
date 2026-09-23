@@ -57,7 +57,8 @@ create table if not exists public.field_updates (
     spool_id     bigint not null,
     qr_id        text,
     joint_no     text,
-    activity     text not null check (activity in ('Fit-Up', 'Welding')),
+    activity     text not null check (activity in ('Fit-Up', 'Welding',
+                                 'Fit-Up inspection', 'Welding inspection')),
     work_date    text not null,               -- 'YYYY-MM-DD' also written to spools
     worker_id    bigint references public.field_workers (id),
     worker_name  text,

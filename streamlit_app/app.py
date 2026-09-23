@@ -2432,6 +2432,9 @@ def _ensure_qr_schema(conn_name: str) -> bool:
         "ALTER TABLE public.spools ADD COLUMN IF NOT EXISTS fitup_by text",
         "ALTER TABLE public.spools ADD COLUMN IF NOT EXISTS welding_by text",
         "ALTER TABLE public.spools ADD COLUMN IF NOT EXISTS welder_no text",
+        # who signed off each inspection, mirroring fitup_by / welding_by
+        "ALTER TABLE public.spools ADD COLUMN IF NOT EXISTS fitup_insp_by text",
+        "ALTER TABLE public.spools ADD COLUMN IF NOT EXISTS welding_insp_by text",
         "DROP INDEX IF EXISTS public.uq_spools_qr_id",          # was UNIQUE in v1
         "CREATE INDEX IF NOT EXISTS idx_spools_qr_id ON public.spools (qr_id)",
         """CREATE TABLE IF NOT EXISTS public.field_workers (
@@ -2451,6 +2454,13 @@ def _ensure_qr_schema(conn_name: str) -> bool:
              recorded_at timestamptz not null default now())""",
         "ALTER TABLE public.field_updates ADD COLUMN IF NOT EXISTS qr_id text",
         "ALTER TABLE public.field_updates ADD COLUMN IF NOT EXISTS joint_no text",
+        # QC sign-off added two activities; the original CHECK only allowed
+        # Fit-Up and Welding, so a QC scan failed outright on any database
+        # built before this. Dropped and re-added, so it self-heals.
+        "ALTER TABLE public.field_updates "
+        "DROP CONSTRAINT IF EXISTS field_updates_activity_check",
+        "ALTER TABLE public.field_updates ADD CONSTRAINT field_updates_activity_check "
+        "CHECK (activity IN ('Fit-Up','Welding','Fit-Up inspection','Welding inspection'))",
         "DROP INDEX IF EXISTS public.uq_field_updates_joint_activity",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_field_updates_joint_activity "
         "ON public.field_updates (qr_id, joint_no, activity) WHERE qr_id IS NOT NULL",
@@ -2534,10 +2544,12 @@ def _register_worker_form(*, key: str, fixed_trade: str | None = None,
         c = st.columns(2)
         name = c[0].text_input("Full name")
         trade = (fixed_trade if fixed_trade
-                 else c[1].selectbox("Trade", ["Fitter", "Welder", "Both"]))
+                 else c[1].selectbox("Trade", ["Fitter", "Welder", "Both", "QC"]))
         c2 = st.columns(2)
-        stamp = c2[0].text_input("Welder No." if fixed_trade == "Fitter"
-                                  else "Welder No. (required for welders)")
+        stamp = c2[0].text_input(
+            "Welder No." if fixed_trade in ("Fitter", "QC")
+            else "Welder No. (required for welders)",
+            help="Welders only — a fitter or QC inspector can leave this blank.")
         phone = c2[1].text_input("Phone (optional)")
         c3 = st.columns(2)
         pin1 = c3[0].text_input("Choose a PIN (4-6 digits)", type="password", max_chars=6)
@@ -2631,7 +2643,11 @@ def page_scan() -> None:
                       coalesce(fitup_date,'')     AS fitup_date,
                       coalesce(welding_date,'')   AS welding_date,
                       coalesce(fitup_by,'')       AS fitup_by,
-                      coalesce(welding_by,'')     AS welding_by
+                      coalesce(welding_by,'')     AS welding_by,
+                      coalesce(fitup_inspection_date,'')   AS fitup_inspection_date,
+                      coalesce(welding_inspection_date,'') AS welding_inspection_date,
+                      coalesce(fitup_insp_by,'')           AS fitup_insp_by,
+                      coalesce(welding_insp_by,'')         AS welding_insp_by
                  FROM spools WHERE qr_id = :c
                 ORDER BY joint_no""",
             {"c": code}, ttl=0,
@@ -2696,10 +2712,15 @@ def page_scan() -> None:
     )
 
     n = len(js)
-    m1, m2 = st.columns(2)
+    m1, m2, m3, m4 = st.columns(4)
     m1.metric("Fit-Up", f"{int((js['fitup_date'] != '').sum())}/{n}")
     m2.metric("Welding", f"{int((js['welding_date'] != '').sum())}/{n}")
+    m3.metric("Fit-Up insp.", f"{int((js['fitup_inspection_date'] != '').sum())}/{n}")
+    m4.metric("Weld insp.", f"{int((js['welding_inspection_date'] != '').sum())}/{n}")
 
+    # This page is used on a phone, so the table stays narrow: the four
+    # metrics above carry inspection status, and the scan-history expander
+    # below names who signed off what.
     view = js[["joint_no", "joint_size", "fitup_date", "fitup_by",
                "welding_date", "welding_by"]].copy()
     view["joint_size"] = pd.to_numeric(view["joint_size"], errors="coerce")
@@ -2707,7 +2728,8 @@ def page_scan() -> None:
     st.dataframe(view, use_container_width=True, hide_index=True)
 
     # Who is updating — the activity follows their trade:
-    #   Fitter -> Fit-Up only,  Welder -> Welding only,  Both -> choose.
+    #   Fitter -> Fit-Up,  Welder -> Welding,  Both -> choose,
+    #   QC -> inspection of work a fitter/welder already recorded.
     allw = db.query(
         "SELECT id, name, trade, coalesce(stamp_no,'') AS stamp_no, pin "
         "FROM field_workers WHERE active ORDER BY name", ttl=0,
@@ -2769,22 +2791,37 @@ def page_scan() -> None:
         activity = "Fit-Up"
     elif wtrade == "Welder":
         activity = "Welding"
+    elif wtrade == "QC":
+        # QC signs off the INSPECTION of work a fitter/welder already did
+        activity = st.radio("Inspection just completed",
+                            ["Fit-Up inspection", "Welding inspection"],
+                            horizontal=True)
     else:                                        # Both
         activity = st.radio("Activity just completed", ["Fit-Up", "Welding"],
                             horizontal=True)
     st.caption(f"**{who}** · {wtrade} → recording **{activity}**")
 
-    col = "fitup_date" if activity == "Fit-Up" else "welding_date"
-    if activity == "Fit-Up":
-        elig = js.loc[js["fitup_date"] == "", "joint_no"].tolist()
-        none_msg = "Every joint on this spool is already fitted-up."
+    # each activity: the column it fills, and the one that must already be
+    # filled before it can be (you can't inspect a joint nobody has worked)
+    _ACT = {
+        "Fit-Up":             ("fitup_date", None),
+        "Welding":            ("welding_date", "fitup_date"),
+        "Fit-Up inspection":  ("fitup_inspection_date", "fitup_date"),
+        "Welding inspection": ("welding_inspection_date", "welding_date"),
+    }
+    col, needs = _ACT[activity]
+    done_word = {"fitup_date": "fitted-up", "welding_date": "welded",
+                 "fitup_inspection_date": "fit-up inspected",
+                 "welding_inspection_date": "welding inspected"}[col]
+    if needs is None:
+        elig = js.loc[js[col] == "", "joint_no"].tolist()
     else:
-        elig = js.loc[(js["fitup_date"] != "") & (js["welding_date"] == ""),
-                      "joint_no"].tolist()
-        pend = js.loc[js["fitup_date"] == "", "joint_no"].tolist()
+        elig = js.loc[(js[needs] != "") & (js[col] == ""), "joint_no"].tolist()
+        pend = js.loc[js[needs] == "", "joint_no"].tolist()
         if pend:
-            st.caption("Fit-Up needed first: " + ", ".join(map(str, pend)))
-        none_msg = "No joints on this spool are waiting for welding."
+            st.caption(f"{'Fit-Up' if needs == 'fitup_date' else 'Welding'} "
+                       "needed first: " + ", ".join(map(str, pend)))
+    none_msg = f"No joints on this spool are waiting to be {done_word}."
 
     if not elig:
         st.info(none_msg)
@@ -2801,8 +2838,10 @@ def page_scan() -> None:
             st.error("Wrong PIN.")
             return
 
-        seq = " AND coalesce(fitup_date,'') <> '' " if activity == "Welding" else ""
-        by_col = "fitup_by" if activity == "Fit-Up" else "welding_by"
+        seq = f" AND coalesce({needs},'') <> '' " if needs else ""
+        by_col = {"fitup_date": "fitup_by", "welding_date": "welding_by",
+                  "fitup_inspection_date": "fitup_insp_by",
+                  "welding_inspection_date": "welding_insp_by"}[col]
         # also stamp the welder's Welder No. onto the spool, beside
         # capping_welder_no, when it's a welding update
         extra_set = ", welder_no = :sn" if activity == "Welding" else ""
