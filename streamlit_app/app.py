@@ -1955,74 +1955,81 @@ def page_wo_summary() -> None:
     )
 
 
-def _clear_dates_ui(col: str, joints: pd.DataFrame, key: dict,
-                    *, spool_sql: str = "dwg_spool_no=:s") -> None:
+def _clear_dates_ui(col: str, joints: pd.DataFrame, *, iso: str, line: str,
+                    jlabel) -> None:
     """Undo an accidental save from Update progress. col is 'fitup_date',
     'welding_date' or 'irn'. Fit-Up can't be cleared while the joint is
     already welded (clear welding first). Fit-Up/Welding also clear who did
     it and the QR scan-history row, otherwise the unique (qr_id, joint,
     activity) guard would block that joint from ever being scanned again.
-    spool_sql lets IRN mode span the several spools it has selected."""
+
+    `joints` already covers every page/spool picked, so a clear spans the
+    same selection the user is looking at. jlabel() names a row the same way
+    the update pickers do, so labels stay unambiguous when one joint no.
+    occurs on several spools."""
     from sqlalchemy import text as _t
     label = {"fitup_date": "fit-up date", "welding_date": "welding date",
              "irn": "IRN date / report no"}[col]
     # shop_field='S' matches the scope the joints preview was built from, so a
     # clear never reaches field-side joints the user wasn't shown.
-    where_spool = (f"shop_field='S' AND iso_dwg_no=:i AND line_no=:l "
-                   f"AND iso_run_no=:p AND {spool_sql}")
-    # Confirm/pick state is keyed per spool selection, so it can't stay armed
-    # from a previous spool and let a stray tap clear the wrong one.
-    scope = re.sub(r"\W+", "_", f"{key.get('i','')}{key.get('p','')}"
-                                f"{key.get('s') or ','.join(key.get('ss') or [])}")[-40:]
+    where_row = ("shop_field='S' AND iso_dwg_no=:i AND line_no=:l "
+                 "AND iso_run_no=:p AND dwg_spool_no=:s")
+    # Confirm/pick state is keyed to the current selection, so it can't stay
+    # armed from a previous one and let a stray tap clear the wrong rows.
+    scope = re.sub(r"\W+", "_", iso + line + "".join(
+        sorted({f"{p}{s}" for p, s in zip(joints.iso_run_no, joints.dwg_spool_no)})))[-40:]
     with st.expander(f"🗑 Clear a saved {label} (entered by mistake)"):
-        targets: list = []
+        rows = pd.DataFrame()
         if col == "irn":
             has = joints[(joints.irn_date != "") | (joints.irn_report_no != "")]
             if has.empty:
                 st.caption("No IRN saved on the spool(s) picked.")
                 return
-            n_sp = has["dwg_spool_no"].nunique() if "dwg_spool_no" in has.columns else 1
-            st.caption(f"Clears the IRN date and report no. on every joint of the "
-                       f"{n_sp} spool(s) picked above.")
+            st.caption("Clears the IRN date and report no. on every joint of the "
+                       f"{has.groupby(['iso_run_no', 'dwg_spool_no']).ngroups} "
+                       "spool(s) picked above.")
         else:
             if col == "fitup_date":
-                clearable = joints.loc[(joints.fitup_date != "") & (joints.welding_date == ""),
-                                       "joint_no"].tolist()
-                blocked = joints.loc[joints.welding_date != "", "joint_no"].tolist()
-                if blocked:
+                rows = joints[(joints.fitup_date != "") & (joints.welding_date == "")]
+                blocked = joints[joints.welding_date != ""]
+                if not blocked.empty:
                     st.caption("Already welded — clear the welding date first: "
-                               + ", ".join(map(str, blocked)))
+                               + ", ".join(jlabel(r) for r in blocked.itertuples()))
             else:
-                clearable = joints.loc[joints.welding_date != "", "joint_no"].tolist()
-            if not clearable:
+                rows = joints[joints.welding_date != ""]
+            if rows.empty:
                 st.caption("No saved dates to clear here.")
                 return
-            targets = st.multiselect("Joint no(s) to clear", clearable,
+            opts = {jlabel(r): (r.iso_run_no, r.dwg_spool_no, r.joint_no)
+                    for r in rows.itertuples()}
+            targets = st.multiselect("Joint(s) to clear", list(opts),
                                      key=f"clr_j_{col}_{scope}")
         ok = st.checkbox("Confirm — remove the saved value", key=f"clr_ok_{col}_{scope}")
         if not st.button("Clear", key=f"clr_btn_{col}_{scope}",
                          disabled=not ok or (col != "irn" and not targets)):
             return
         if col == "irn":
-            db.execute(
+            pairs = sorted({(p, s) for p, s in zip(has.iso_run_no, has.dwg_spool_no)})
+            db.execute_many(
                 f"""UPDATE spools SET irn_date = NULL, irn_report_no = NULL
-                     WHERE {where_spool}""",
-                key,
+                     WHERE {where_row}""",
+                [{"i": iso, "l": line, "p": p, "s": s} for p, s in pairs],
             )
-            what = "irn_date/irn_report_no"
+            what = f"irn_date/irn_report_no x{len(pairs)} spool(s)"
         else:
             activity = "Fit-Up" if col == "fitup_date" else "Welding"
             by_sql = ("fitup_by = NULL" if col == "fitup_date"
                       else "welding_by = NULL, welder_no = NULL")
-            where = f"{where_spool} AND joint_no=:j"
+            where = f"{where_row} AND joint_no=:j"
             with db.engine().begin() as cx:
-                for j in targets:
-                    p = {**key, "j": j}
+                for lbl in targets:
+                    p_, s_, j_ = opts[lbl]
+                    prm = {"i": iso, "l": line, "p": p_, "s": s_, "j": j_}
                     cx.execute(_t(
                         "DELETE FROM field_updates WHERE activity = :a AND joint_no = :j "
                         f"AND qr_id IN (SELECT qr_id FROM spools WHERE {where} "
-                        "AND qr_id IS NOT NULL)"), {**p, "a": activity})
-                    cx.execute(_t(f"UPDATE spools SET {col} = NULL, {by_sql} WHERE {where}"), p)
+                        "AND qr_id IS NOT NULL)"), {**prm, "a": activity})
+                    cx.execute(_t(f"UPDATE spools SET {col} = NULL, {by_sql} WHERE {where}"), prm)
             what = f"{col} x{len(targets)}"
         try:
             db.execute("INSERT INTO user_log (username) VALUES (:u)",
@@ -2077,147 +2084,183 @@ def page_update() -> None:
         f"AND coalesce(iso_run_no,'')<>'' ORDER BY 1",
         {"i": iso, "l": line}, ttl=0,
     )["iso_run_no"].tolist()
-    pageno = st.selectbox("PAGE NO (iso run no)", [""] + page_opts)
-    if not pageno:
+    pc = st.columns([4, 1])
+    all_pages = pc[1].checkbox("All pages", key="upd_all_pages")
+    pages = pc[0].multiselect("PAGE NO (iso run no)", page_opts,
+                              default=page_opts if all_pages else [],
+                              disabled=all_pages,
+                              help="Pick as many pages as you need — spools from "
+                                   "all of them are offered below.")
+    if all_pages:
+        pages = page_opts
+    if not pages:
         return
 
-    spool_opts = db.query(
-        f"SELECT DISTINCT dwg_spool_no {base} AND iso_dwg_no=:i AND line_no=:l "
-        f"AND iso_run_no=:p AND coalesce(dwg_spool_no,'')<>'' ORDER BY 1",
-        {"i": iso, "l": line, "p": pageno}, ttl=0,
-    )["dwg_spool_no"].tolist()
-    if is_irn:
-        # IRN is recorded per spool, so several can share one report no.
-        spools_sel = st.multiselect(
-            "DWG SPOOL NO", spool_opts,
-            help="Pick one or more spools — the IRN date and report no. are "
-                 "applied to every joint of each spool picked.")
-        if not spools_sel:
-            return
-        spool_sql = "dwg_spool_no = ANY(:ss)"
-        key = {"i": iso, "l": line, "p": pageno, "ss": spools_sel}
-    else:
-        spool = st.selectbox("DWG SPOOL NO", [""] + spool_opts)
-        if not spool:
-            return
-        spool_sql = "dwg_spool_no=:s"
-        key = {"i": iso, "l": line, "p": pageno, "s": spool}
-    where_spool = (f"iso_dwg_no=:i AND line_no=:l AND iso_run_no=:p AND {spool_sql}")
-    # Writes stay inside the same shop-only scope as `base`, which every
-    # picker and the joints preview use - otherwise a save would also stamp
-    # field-side joints the user was never shown.
-    write_where = f"shop_field='S' AND {where_spool}"
-    info = db.query(
-        f"""SELECT string_agg(DISTINCT nullif(trim(wo_no),''), ', ')      AS wo_no,
-                   string_agg(DISTINCT nullif(trim(batch_no),''), ', ')    AS batch_no,
-                   string_agg(DISTINCT nullif(trim(area),''), ', ')        AS area,
-                   string_agg(DISTINCT nullif(trim(system_no),''), ', ')   AS system_no,
-                   string_agg(DISTINCT nullif(trim(test_pack_no),''), ', ') AS test_pack_no,
-                   string_agg(DISTINCT nullif(trim(material_group),''), ', ') AS material_group,
-                   string_agg(DISTINCT nullif(trim(status),''), ', ')      AS status,
-                   count(*) AS joints
-            {base} AND {where_spool}""",
-        key, ttl=0,
-    ).iloc[0]
-    st.markdown(
-        f"**WO no:** {info['wo_no'] or '—'} &nbsp;·&nbsp; "
-        f"**Batch:** {info['batch_no'] or '—'} &nbsp;·&nbsp; "
-        f"**Area:** {info['area'] or '—'} &nbsp;·&nbsp; "
-        f"**System:** {info['system_no'] or '—'} &nbsp;·&nbsp; "
-        f"**Test pack:** {info['test_pack_no'] or '—'} &nbsp;·&nbsp; "
-        f"**Material:** {info['material_group'] or '—'} &nbsp;·&nbsp; "
-        f"**Status:** {info['status'] or '—'} &nbsp;·&nbsp; "
-        f"**Joints:** {int(info['joints'])}"
+    # Spool options are concrete (page, spool) pairs: the same DWG SPOOL NO can
+    # exist on more than one page, so a bare name would be ambiguous once
+    # several pages are in play.
+    sp_rows = db.query(
+        f"SELECT DISTINCT iso_run_no, dwg_spool_no {base} AND iso_dwg_no=:i AND line_no=:l "
+        f"AND iso_run_no = ANY(:pp) AND coalesce(dwg_spool_no,'')<>'' ORDER BY 1, 2",
+        {"i": iso, "l": line, "pp": pages}, ttl=0,
     )
+    multi_page = len(pages) > 1
+    sp_lbl = lambda p, s: (f"{p} · {s}" if multi_page else str(s))
+    pair_of = {sp_lbl(r.iso_run_no, r.dwg_spool_no): (r.iso_run_no, r.dwg_spool_no)
+               for r in sp_rows.itertuples()}
+    sc_ = st.columns([4, 1])
+    all_spools = sc_[1].checkbox("All spools", key="upd_all_spools")
+    picked_lbls = sc_[0].multiselect(
+        "DWG SPOOL NO", list(pair_of),
+        default=list(pair_of) if all_spools else [], disabled=all_spools,
+        help="Pick as many spools as you need."
+             + ("  The IRN date and report no. are applied to every joint of each."
+                if is_irn else ""))
+    if all_spools:
+        picked_lbls = list(pair_of)
+    if not picked_lbls:
+        return
+    pairs = [pair_of[x] for x in picked_lbls]
 
-    joints = db.query(
-        f"""SELECT {'dwg_spool_no,' if is_irn else ''}
-                   joint_no, joint_size, item_1, sch_rating_1, item_2, sch_rating_2,
+    jq = db.query(
+        f"""SELECT iso_run_no, dwg_spool_no, joint_no, joint_size,
+                   item_1, sch_rating_1, item_2, sch_rating_2,
                    coalesce(fitup_date,'')     AS fitup_date,
                    coalesce(welding_date,'')   AS welding_date,
                    coalesce(irn_date,'')       AS irn_date,
-                   coalesce(irn_report_no,'')  AS irn_report_no
-            {base} AND {where_spool}
-            ORDER BY {'dwg_spool_no,' if is_irn else ''} joint_no""",
-        key, ttl=0,
+                   coalesce(irn_report_no,'')  AS irn_report_no,
+                   coalesce(wo_no,'')          AS wo_no,
+                   coalesce(batch_no,'')       AS batch_no,
+                   coalesce(area,'')           AS area,
+                   coalesce(system_no,'')      AS system_no,
+                   coalesce(test_pack_no,'')   AS test_pack_no,
+                   coalesce(material_group,'') AS material_group,
+                   coalesce(status,'')         AS status
+            {base} AND iso_dwg_no=:i AND line_no=:l
+              AND iso_run_no = ANY(:pp) AND dwg_spool_no = ANY(:ss)
+            ORDER BY iso_run_no, dwg_spool_no, joint_no""",
+        {"i": iso, "l": line, "pp": pages, "ss": sorted({s for _, s in pairs})}, ttl=0,
     )
+    # ANY(:pp) x ANY(:ss) is a cross product, so trim it back to the exact
+    # page/spool pairs that were actually ticked.
+    want = set(pairs)
+    joints = jq[[(p, s) in want
+                 for p, s in zip(jq["iso_run_no"], jq["dwg_spool_no"])]].reset_index(drop=True)
     if joints.empty:
         st.info("No joints for this selection.")
         return
-    st.dataframe(joints, use_container_width=True, hide_index=True)
+
+    _uniq = lambda c: ", ".join(sorted({x for x in joints[c] if x})) or "—"
+    st.markdown(
+        f"**WO no:** {_uniq('wo_no')} &nbsp;·&nbsp; "
+        f"**Batch:** {_uniq('batch_no')} &nbsp;·&nbsp; "
+        f"**Area:** {_uniq('area')} &nbsp;·&nbsp; "
+        f"**System:** {_uniq('system_no')} &nbsp;·&nbsp; "
+        f"**Test pack:** {_uniq('test_pack_no')} &nbsp;·&nbsp; "
+        f"**Material:** {_uniq('material_group')} &nbsp;·&nbsp; "
+        f"**Status:** {_uniq('status')} &nbsp;·&nbsp; "
+        f"**Spools:** {len(pairs)} &nbsp;·&nbsp; **Joints:** {len(joints)}"
+    )
+
+    # One joint no. can occur on several spools, so qualify it when more than
+    # one spool is in play. Joint FIRST: these become multiselect chips, which
+    # truncate at about 12 characters, and leading with the page would leave a
+    # row of identical "31 OF 60 · SPOO…" you can't tell apart.
+    multi_spool = len(pairs) > 1
+    def jlabel(r) -> str:
+        if multi_spool:
+            return f"{r.joint_no} · {sp_lbl(r.iso_run_no, r.dwg_spool_no)}"
+        return str(r.joint_no)
+
+    _show = ["iso_run_no", "dwg_spool_no"] if multi_spool else []
+    _show += ["joint_no", "joint_size", "item_1", "sch_rating_1", "item_2",
+              "sch_rating_2", "fitup_date", "welding_date", "irn_date", "irn_report_no"]
+    st.dataframe(joints[_show], use_container_width=True, hide_index=True)
+
+    # Writes stay inside the same shop-only scope as `base`, which every picker
+    # and the joints preview use - otherwise a save would also stamp field-side
+    # joints the user was never shown.
+    where_row = ("shop_field='S' AND iso_dwg_no=:i AND line_no=:l "
+                 "AND iso_run_no=:p AND dwg_spool_no=:s")
 
     if is_irn:
-        def _spools_of(sel: pd.DataFrame) -> str:
-            return ", ".join(sorted(sel["dwg_spool_no"].astype(str).unique()))
-
+        _spools_of = lambda sel: ", ".join(sorted({
+            sp_lbl(p, s) for p, s in zip(sel["iso_run_no"], sel["dwg_spool_no"])}))
         not_ready = joints[(joints.fitup_date == "") | (joints.welding_date == "")]
         if not not_ready.empty:
             st.caption(f"Not yet fit-up + welded: {_spools_of(not_ready)}")
         already = joints[joints.irn_date != ""]
         if not already.empty:
             st.caption(f"Already IRN'd: {_spools_of(already)}")
-        _clear_dates_ui("irn", joints, key, spool_sql=spool_sql)
+        _clear_dates_ui("irn", joints, iso=iso, line=line, jlabel=jlabel)
         irn_date_in = st.date_input("IRN Date", value=date.today(), format="DD/MM/YYYY")
         irn_report = st.text_input("IRN Report No")
-        n_spools = len(spools_sel)
-        if st.button(f"Save IRN for {n_spools} spool(s)", type="primary"):
+        if st.button(f"Save IRN for {len(pairs)} spool(s)", type="primary"):
             if not irn_report.strip():
                 st.warning("Enter an IRN report no.")
                 return
-            db.execute(
+            db.execute_many(
                 f"""UPDATE spools SET irn_date = :d, irn_report_no = :r
-                     WHERE {write_where}""",
-                {**key, "d": irn_date_in.isoformat(), "r": irn_report.strip()},
+                     WHERE {where_row}""",
+                [{"d": irn_date_in.isoformat(), "r": irn_report.strip(),
+                  "i": iso, "l": line, "p": p, "s": s} for p, s in pairs],
             )
             try:
                 db.execute("INSERT INTO user_log (username) VALUES (:u)",
                            {"u": f"{st.session_state['user']} "
-                                 f"[irn_date/irn_report_no x{n_spools} spool(s)]"})
+                                 f"[irn_date/irn_report_no x{len(pairs)} spool(s)]"})
             except Exception:
                 pass
             st.cache_data.clear()
-            st.success(f"Updated IRN date/report no for {n_spools} spool(s) "
+            st.success(f"Updated IRN date/report no for {len(pairs)} spool(s) "
                        f"({len(joints)} joint(s)).")
             st.rerun()
         return
 
     if col == "fitup_date":
-        eligible = joints.loc[joints.fitup_date == "", "joint_no"].tolist()
-        locked = joints.loc[joints.fitup_date != "", "joint_no"].tolist()
+        elig = joints[joints.fitup_date == ""]
+        locked = joints[joints.fitup_date != ""]
     else:
-        eligible = joints.loc[(joints.fitup_date != "") & (joints.welding_date == ""),
-                              "joint_no"].tolist()
-        locked = joints.loc[joints.welding_date != "", "joint_no"].tolist()
-        no_fitup = joints.loc[joints.fitup_date == "", "joint_no"].tolist()
-        if no_fitup:
-            st.caption(f"Fit-Up required first: {', '.join(map(str, no_fitup))}")
+        elig = joints[(joints.fitup_date != "") & (joints.welding_date == "")]
+        locked = joints[joints.welding_date != ""]
+        no_fitup = joints[joints.fitup_date == ""]
+        if not no_fitup.empty:
+            st.caption("Fit-Up required first: "
+                       + ", ".join(jlabel(r) for r in no_fitup.itertuples()))
 
-    if locked:
-        st.caption(f"Already set (locked): {', '.join(map(str, locked))}")
-    _clear_dates_ui(col, joints, key)
-    if not eligible:
+    if not locked.empty:
+        st.caption(f"Already set (locked), {len(locked)} joint(s): "
+                   + ", ".join(jlabel(r) for r in locked.itertuples()))
+    _clear_dates_ui(col, joints, iso=iso, line=line, jlabel=jlabel)
+    if elig.empty:
         st.info("No joints available to update here.")
         return
 
-    picked = st.multiselect("Joint no(s) to update", eligible, default=eligible)
+    opts = {jlabel(r): (r.iso_run_no, r.dwg_spool_no, r.joint_no)
+            for r in elig.itertuples()}
+    picked = st.multiselect(f"Joint(s) to update — {len(opts)} ready",
+                            list(opts), default=list(opts))
     d = st.date_input("Date", value=date.today(), format="DD/MM/YYYY")
-    if st.button(f"Save {mode.lower()}", type="primary"):
+    if st.button(f"Save {mode.lower()} for {len(picked)} joint(s)", type="primary"):
         if not picked:
             st.warning("Select at least one joint.")
             return
+        rows = [opts[x] for x in picked]
         db.execute_many(
             f"""UPDATE spools SET {col} = :d
-                WHERE iso_dwg_no=:i AND line_no=:l AND iso_run_no=:p
-                  AND dwg_spool_no=:s AND joint_no=:j""",
-            [{"d": d.isoformat(), "i": iso, "l": line, "p": pageno, "s": spool, "j": j}
-             for j in picked],
+                 WHERE {where_row} AND joint_no=:j""",
+            [{"d": d.isoformat(), "i": iso, "l": line, "p": p, "s": s, "j": j}
+             for p, s, j in rows],
         )
         try:
             db.execute("INSERT INTO user_log (username) VALUES (:u)",
-                       {"u": f"{st.session_state['user']} [{col}]"})
+                       {"u": f"{st.session_state['user']} [{col} x{len(rows)} joint(s) "
+                             f"on {len({(p, s) for p, s, _ in rows})} spool(s)]"})
         except Exception:
             pass
-        st.success(f"Updated {col} for {len(picked)} joint(s).")
+        st.cache_data.clear()
+        st.success(f"Updated {col} for {len(rows)} joint(s) across "
+                   f"{len({(p, s) for p, s, _ in rows})} spool(s).")
         st.rerun()
 
 
