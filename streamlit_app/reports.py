@@ -179,41 +179,87 @@ def summarize(classified: pd.DataFrame) -> pd.DataFrame:
              [["Spool Status", "Pipe Spools", "Joints", "Dia-Inch", "% Spools", "% Dia-Inch"]])
 
 
+def _under_fab_by_drawing(part: pd.DataFrame) -> pd.DataFrame:
+    """One completed-vs-balance row per ISO DWG NO. A single sheet-wide
+    total (the original version of this summary) hides which drawings are
+    actually stuck behind which - two drawings averaging to "50% welded"
+    reads very differently if one is done and the other hasn't started."""
+    d = part.copy()
+    d["iso_dwg_no"] = d["iso_dwg_no"].fillna("").astype(str).str.strip().replace("", "(blank)")
+    fit_done = d["fitup_date"].fillna("").astype(str).str.strip().ne("")
+    weld_done = d["welding_date"].fillna("").astype(str).str.strip().ne("")
+    d = d.assign(_fit=fit_done, _weld=weld_done)
+
+    g = d.groupby("iso_dwg_no").agg(
+        **{"Spools": ("spool_key", "nunique"),
+           "Joints": ("joint_no", "count"),
+           "Fit-up Completed": ("_fit", "sum"),
+           "Welding Completed": ("_weld", "sum")}
+    ).reset_index().rename(columns={"iso_dwg_no": "ISO DWG NO"})
+    g["Fit-up Balance"] = g["Joints"] - g["Fit-up Completed"]
+    g["Fit-up %"] = (g["Fit-up Completed"] / g["Joints"] * 100).round(1)
+    g["Welding Balance"] = g["Joints"] - g["Welding Completed"]
+    g["Welding %"] = (g["Welding Completed"] / g["Joints"] * 100).round(1)
+    return g.sort_values("ISO DWG NO").reset_index(drop=True)[
+        ["ISO DWG NO", "Spools", "Joints",
+         "Fit-up Completed", "Fit-up Balance", "Fit-up %",
+         "Welding Completed", "Welding Balance", "Welding %"]
+    ]
+
+
 def _prepend_completed_vs_balance(ws, part: pd.DataFrame, *, gen: str) -> int:
     """Under Fabrication is a mix: fit-up is usually nearly done, welding is
     the real bottleneck (confirmed against live data - 530/570 fitted but
-    only 147/570 welded on one project). Prepends a small completed-vs-
-    balance summary for both stages above the joint table already written
-    to ws. Returns the row the real header ended up on, for _format_sheet."""
-    def _done(col: str) -> int:
-        return int(part[col].fillna("").astype(str).str.strip().ne("").sum())
+    only 147/570 welded on one project). Prepends a completed-vs-balance
+    table, one row per drawing, above the joint table already written to
+    ws. Returns the row the real header ended up on, for _format_sheet."""
+    by_dwg = _under_fab_by_drawing(part)
+    headers = list(by_dwg.columns)
+    pct_cols = {"Fit-up %", "Welding %"}
+    thin = Side(border_style="thin", color="BFBFBF")
+    box = Border(top=thin, bottom=thin, left=thin, right=thin)
 
-    total = len(part)
-    fit_done = _done("fitup_date")
-    weld_done = _done("welding_date")
-    n_spools = part["spool_key"].nunique() if "spool_key" in part.columns else None
-    pct = lambda n: f"{n / total * 100:.1f}%" if total else "—"
-
-    rows = ([("Pipe spools", n_spools)] if n_spools is not None else []) + [
-        ("Total joints", total),
-        ("Fit-up completed", fit_done),
-        ("Fit-up balance", total - fit_done),
-        ("Fit-up % complete", pct(fit_done)),
-        ("Welding completed", weld_done),
-        ("Welding balance", total - weld_done),
-        ("Welding % complete", pct(weld_done)),
-    ]
-
-    n = len(rows) + 4   # title + subtitle + blank + rows + trailing blank
+    HR = 4                                  # this table's own header row
+    n_data = len(by_dwg)
+    total_row = HR + 1 + n_data
+    n = total_row + 1                       # everything through TOTAL, + one blank spacer row
     ws.insert_rows(1, amount=n)
-    ws.cell(1, 1, "UNDER FABRICATION  —  COMPLETED vs BALANCE").font = \
+
+    ws.cell(1, 1, "UNDER FABRICATION  —  COMPLETED vs BALANCE BY DRAWING").font = \
         Font(bold=True, size=13, color="1F4E79")
-    ws.cell(2, 1, gen).font = Font(italic=True, size=9, color="808080")
-    r = 4
-    for k, v in rows:
-        ws.cell(r, 1, k).font = Font(bold=True)
-        ws.cell(r, 2, v)
-        r += 1
+    ws.cell(2, 1, gen + f"   ·   {by_dwg['Spools'].sum()} pipe spool(s), "
+                        f"{by_dwg['Joints'].sum()} joint(s)").font = \
+        Font(italic=True, size=9, color="808080")
+
+    for j, h in enumerate(headers, 1):
+        c = ws.cell(HR, j, h)
+        c.font, c.border = Font(bold=True, color="FFFFFF"), box
+        c.fill = PatternFill("solid", start_color="1F4E79")
+        c.alignment = Alignment(horizontal="center", vertical="center")
+
+    for i, row in enumerate(by_dwg.itertuples(index=False), HR + 1):
+        for j, (h, v) in enumerate(zip(headers, row), 1):
+            c = ws.cell(i, j, v)
+            c.border = box
+            c.alignment = Alignment(horizontal="left" if j == 1 else "center")
+            if h in pct_cols:
+                c.number_format = '0.0"%"'
+
+    ws.cell(total_row, 1, "TOTAL").font = Font(bold=True)
+    ws.cell(total_row, 1).border = box
+    for j, h in enumerate(headers[1:], 2):
+        col = ws.cell(HR, j).column_letter
+        c = ws.cell(total_row, j)
+        c.font, c.border, c.alignment = Font(bold=True), box, Alignment(horizontal="center")
+        if h in pct_cols:
+            done_col = ws.cell(HR, j - 2).column_letter    # the paired Completed column
+            joints_col = ws.cell(HR, 3).column_letter       # Joints
+            c.value = (f"=SUM({done_col}{HR+1}:{done_col}{total_row-1})"
+                      f"/SUM({joints_col}{HR+1}:{joints_col}{total_row-1})*100")
+            c.number_format = '0.0"%"'
+        else:
+            c.value = f"=SUM({col}{HR+1}:{col}{total_row-1})"
+
     return n + 1   # the joint table's header row, pushed down by the insert
 
 
