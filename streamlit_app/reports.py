@@ -134,19 +134,11 @@ _FILL_COLORS = {
 }
 
 
-def _format_sheet(ws, header_row: int = 1) -> None:
-    """header_row lets a sheet carry rows ABOVE the real header (e.g. the
-    Under Fabrication joint summary) without disturbing autofilter/freeze/
-    colouring for every other sheet, which all still use the default 1."""
-    last_col, last_row = ws.max_column, ws.max_row
-    ws.auto_filter.ref = f"A{header_row}:{get_column_letter(last_col)}{last_row}"
-    # Freezing at the header only helps while the frozen band still fits on
-    # screen. Under Fabrication's per-spool summary can push the joint header
-    # down ~70 rows, and freezing that many would fill the whole window and
-    # leave nowhere to scroll, so past a screen's worth we don't freeze.
-    ws.freeze_panes = f"A{header_row + 1}" if header_row <= 15 else None
+def _format_sheet(ws) -> None:
+    ws.auto_filter.ref = ws.dimensions
+    ws.freeze_panes = "A2"
     thin = Side(border_style="thin")
-    for row in ws.iter_rows(min_row=header_row + 1, max_row=ws.max_row):
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
         status = row[-1].value if len(row) > 1 else None
         code = _FILL_COLORS.get(status, "FFFFFF")
         fill = PatternFill(start_color=code, end_color=code, fill_type="solid")
@@ -154,7 +146,7 @@ def _format_sheet(ws, header_row: int = 1) -> None:
             cell.fill = fill
             cell.alignment = Alignment(horizontal="center", vertical="center")
             cell.border = Border(top=thin, bottom=thin, left=thin, right=thin)
-    for cell in ws[header_row]:
+    for cell in ws[1]:
         cell.font = Font(bold=True)
     for col in ws.columns:
         width = max(len(str(c.value) or "") for c in col) + 2
@@ -227,32 +219,34 @@ def _under_fab_by_spool(part: pd.DataFrame) -> pd.DataFrame:
     return g.reset_index(drop=True)[[lbl for _, lbl in ids] + _UF_JOINT_COLS]
 
 
-def _prepend_completed_vs_balance(ws, part: pd.DataFrame, *, gen: str) -> int:
-    """Under Fabrication is a mix: fit-up is usually nearly done, welding is
-    the real bottleneck (confirmed against live data - 530/570 fitted but
-    only 147/570 welded on one project). Prepends a completed-vs-balance
-    table, one row per drawing, above the joint table already written to
-    ws. Returns the row the real header ended up on, for _format_sheet."""
-    by_spool = _under_fab_by_spool(part)
-    headers = list(by_spool.columns)
-    id_labels = [lbl for _, lbl in _UF_ID_COLS]
-    sum_cols = {"Joints", "Fit-up Completed", "Fit-up Balance",
-                "Welding Completed", "Welding Balance"}
+UF_SUMMARY_SHEET = "Under Fabrication Summary"
+
+
+def _write_under_fab_sheet(wb, part: pd.DataFrame, *, gen: str, index: int = 2) -> None:
+    """Completed vs balance per pipe spool, on its own sheet next to the
+    other summaries. It lives apart from the Under Fabrication joint list so
+    that sheet stays a plain filterable table: stacked on top of it, 62
+    summary rows pushed the joint header 69 rows down, which made freezing
+    its header useless and put two different tables under one autofilter.
+
+    Under Fabrication is a mix by nature - every spool here has some joints
+    done and some not. Fit-up is usually nearly finished while welding is
+    the real bottleneck (live data: 530/570 fitted, only 147/570 welded),
+    so both stages get a completed/balance pair rather than just welding."""
+    tbl = _under_fab_by_spool(part)
+    headers = list(tbl.columns)
+    id_labels = {lbl for _, lbl in _UF_ID_COLS}
     pct_of = {"Fit-up %": "Fit-up Completed", "Welding %": "Welding Completed"}
     col_of = {h: get_column_letter(j) for j, h in enumerate(headers, 1)}
     thin = Side(border_style="thin", color="BFBFBF")
     box = Border(top=thin, bottom=thin, left=thin, right=thin)
+    HR = 4                                  # header row, matching _write_report_sheet
 
-    HR = 4                                  # this table's own header row
-    n_data = len(by_spool)
-    total_row = HR + 1 + n_data
-    n = total_row + 1                       # everything through TOTAL, + one blank spacer row
-    ws.insert_rows(1, amount=n)
-
+    ws = wb.create_sheet(UF_SUMMARY_SHEET, index)
     ws.cell(1, 1, "UNDER FABRICATION  —  COMPLETED vs BALANCE BY PIPE SPOOL").font = \
-        Font(bold=True, size=13, color="1F4E79")
-    ws.cell(2, 1, gen + f"   ·   {n_data} pipe spool(s), "
-                        f"{by_spool['Joints'].sum()} joint(s)").font = \
+        Font(bold=True, size=14, color="1F4E79")
+    ws.cell(2, 1, gen + f"   ·   {len(tbl)} pipe spool(s), "
+                        f"{tbl['Joints'].sum()} joint(s) still in fabrication").font = \
         Font(italic=True, size=9, color="808080")
 
     for j, h in enumerate(headers, 1):
@@ -261,13 +255,18 @@ def _prepend_completed_vs_balance(ws, part: pd.DataFrame, *, gen: str) -> int:
         c.fill = PatternFill("solid", start_color="1F4E79")
         c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-    for i, row in enumerate(by_spool.itertuples(index=False), HR + 1):
+    r = HR
+    for row in tbl.itertuples(index=False):
+        r += 1
         for j, (h, v) in enumerate(zip(headers, row), 1):
-            c = ws.cell(i, j, v)
+            c = ws.cell(r, j, v)
             c.border = box
             c.alignment = Alignment(horizontal="left" if h in id_labels else "center")
             if h in pct_of:
                 c.number_format = '0.0"%"'
+            elif h not in id_labels:
+                c.number_format = "#,##0"
+    total_row = r + 1
 
     ws.cell(total_row, 1, "TOTAL").font = Font(bold=True)
     ws.cell(total_row, 1).border = box
@@ -279,11 +278,17 @@ def _prepend_completed_vs_balance(ws, part: pd.DataFrame, *, gen: str) -> int:
             c.value = (f"=SUM({done}{HR+1}:{done}{total_row-1})"
                        f"/SUM({joints}{HR+1}:{joints}{total_row-1})*100")
             c.number_format = '0.0"%"'
-        elif h in sum_cols:
+        elif h not in id_labels:
             col = col_of[h]
             c.value = f"=SUM({col}{HR+1}:{col}{total_row-1})"
+            c.number_format = "#,##0"
 
-    return n + 1   # the joint table's header row, pushed down by the insert
+    # filter the data rows only, so sorting can't drag the TOTAL row into them
+    ws.auto_filter.ref = f"A{HR}:{col_of[headers[-1]]}{total_row - 1}"
+    ws.freeze_panes = f"A{HR + 1}"
+    for j, h in enumerate(headers, 1):
+        longest = max([len(str(h))] + [len(str(v)) for v in tbl[h]])
+        ws.column_dimensions[get_column_letter(j)].width = min(max(longest + 3, 9), 24)
 
 
 def build_classified_xlsx(df: pd.DataFrame) -> bytes:
@@ -321,7 +326,7 @@ def build_classified_xlsx(df: pd.DataFrame) -> bytes:
     ]
 
     gen = f"Generated {datetime.now(MYT):%Y-%m-%d %H:%M} MYT"
-    manual = {"Summary", "Shop and Field"}
+    manual = {"Summary", "Shop and Field", UF_SUMMARY_SHEET}
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df_final.to_excel(writer, index=False, sheet_name="All Spools")
@@ -337,15 +342,12 @@ def build_classified_xlsx(df: pd.DataFrame) -> bytes:
         _write_report_sheet(wb, "Shop and Field", "SHOP vs FIELD  —  BREAKDOWN",
                             gen + "   ·   all spools by fabrication location",
                             sf, index=1)
-        under_fab_header_row = 1
-        if "Under Fabrication" in wb.sheetnames:
-            uf_part = df_shop[df_shop["Spool Status"] == "Under Fabrication"]
-            under_fab_header_row = _prepend_completed_vs_balance(
-                wb["Under Fabrication"], uf_part, gen=gen)
+        uf_part = df_shop[df_shop["Spool Status"] == "Under Fabrication"]
+        if not uf_part.empty:
+            _write_under_fab_sheet(wb, uf_part, gen=gen, index=2)
         for name in wb.sheetnames:
             if name not in manual:
-                hdr = under_fab_header_row if name == "Under Fabrication" else 1
-                _format_sheet(wb[name], hdr)
+                _format_sheet(wb[name])
     return buf.getvalue()
 
 
