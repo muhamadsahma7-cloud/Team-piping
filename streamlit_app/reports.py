@@ -134,11 +134,15 @@ _FILL_COLORS = {
 }
 
 
-def _format_sheet(ws) -> None:
-    ws.auto_filter.ref = ws.dimensions
-    ws.freeze_panes = "A2"
+def _format_sheet(ws, header_row: int = 1) -> None:
+    """header_row lets a sheet carry rows ABOVE the real header (e.g. the
+    Under Fabrication joint summary) without disturbing autofilter/freeze/
+    colouring for every other sheet, which all still use the default 1."""
+    last_col, last_row = ws.max_column, ws.max_row
+    ws.auto_filter.ref = f"A{header_row}:{get_column_letter(last_col)}{last_row}"
+    ws.freeze_panes = f"A{header_row + 1}"
     thin = Side(border_style="thin")
-    for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+    for row in ws.iter_rows(min_row=header_row + 1, max_row=ws.max_row):
         status = row[-1].value if len(row) > 1 else None
         code = _FILL_COLORS.get(status, "FFFFFF")
         fill = PatternFill(start_color=code, end_color=code, fill_type="solid")
@@ -146,7 +150,7 @@ def _format_sheet(ws) -> None:
             cell.fill = fill
             cell.alignment = Alignment(horizontal="center", vertical="center")
             cell.border = Border(top=thin, bottom=thin, left=thin, right=thin)
-    for cell in ws[1]:
+    for cell in ws[header_row]:
         cell.font = Font(bold=True)
     for col in ws.columns:
         width = max(len(str(c.value) or "") for c in col) + 2
@@ -173,6 +177,44 @@ def summarize(classified: pd.DataFrame) -> pd.DataFrame:
     return (g.sort_values("Spool Status", key=lambda c: c.map(lambda x: _rank.get(x, 99)))
              .reset_index(drop=True)
              [["Spool Status", "Pipe Spools", "Joints", "Dia-Inch", "% Spools", "% Dia-Inch"]])
+
+
+def _prepend_completed_vs_balance(ws, part: pd.DataFrame, *, gen: str) -> int:
+    """Under Fabrication is a mix: fit-up is usually nearly done, welding is
+    the real bottleneck (confirmed against live data - 530/570 fitted but
+    only 147/570 welded on one project). Prepends a small completed-vs-
+    balance summary for both stages above the joint table already written
+    to ws. Returns the row the real header ended up on, for _format_sheet."""
+    def _done(col: str) -> int:
+        return int(part[col].fillna("").astype(str).str.strip().ne("").sum())
+
+    total = len(part)
+    fit_done = _done("fitup_date")
+    weld_done = _done("welding_date")
+    n_spools = part["spool_key"].nunique() if "spool_key" in part.columns else None
+    pct = lambda n: f"{n / total * 100:.1f}%" if total else "—"
+
+    rows = ([("Pipe spools", n_spools)] if n_spools is not None else []) + [
+        ("Total joints", total),
+        ("Fit-up completed", fit_done),
+        ("Fit-up balance", total - fit_done),
+        ("Fit-up % complete", pct(fit_done)),
+        ("Welding completed", weld_done),
+        ("Welding balance", total - weld_done),
+        ("Welding % complete", pct(weld_done)),
+    ]
+
+    n = len(rows) + 4   # title + subtitle + blank + rows + trailing blank
+    ws.insert_rows(1, amount=n)
+    ws.cell(1, 1, "UNDER FABRICATION  —  COMPLETED vs BALANCE").font = \
+        Font(bold=True, size=13, color="1F4E79")
+    ws.cell(2, 1, gen).font = Font(italic=True, size=9, color="808080")
+    r = 4
+    for k, v in rows:
+        ws.cell(r, 1, k).font = Font(bold=True)
+        ws.cell(r, 2, v)
+        r += 1
+    return n + 1   # the joint table's header row, pushed down by the insert
 
 
 def build_classified_xlsx(df: pd.DataFrame) -> bytes:
@@ -226,9 +268,15 @@ def build_classified_xlsx(df: pd.DataFrame) -> bytes:
         _write_report_sheet(wb, "Shop and Field", "SHOP vs FIELD  —  BREAKDOWN",
                             gen + "   ·   all spools by fabrication location",
                             sf, index=1)
+        under_fab_header_row = 1
+        if "Under Fabrication" in wb.sheetnames:
+            uf_part = df_shop[df_shop["Spool Status"] == "Under Fabrication"]
+            under_fab_header_row = _prepend_completed_vs_balance(
+                wb["Under Fabrication"], uf_part, gen=gen)
         for name in wb.sheetnames:
             if name not in manual:
-                _format_sheet(wb[name])
+                hdr = under_fab_header_row if name == "Under Fabrication" else 1
+                _format_sheet(wb[name], hdr)
     return buf.getvalue()
 
 
