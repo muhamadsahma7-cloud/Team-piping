@@ -1152,7 +1152,7 @@ def page_overview() -> None:
                "(ties to *Total completed spools* above).")
     t1, t2, t3, t4, t5 = st.tabs(
         ["By work order", "By batch no", "By area", "By size & material",
-         "By pipe spool & material"])
+         "Pipe spools by material"])
     with t1:
         show_table(breakdown("wo_no", "wo_no"), "progress_by_wo",
                    progress=("fitup_%", "welding_%"), money=_mny)
@@ -1168,17 +1168,46 @@ def page_overview() -> None:
                    "progress_by_size_material",
                    progress=("fitup_%", "welding_%"), money=_mny)
     with t5:
-        # one row per pipe spool, keyed the way the spool-count CTE above keys
-        # them. material rides along as a dimension rather than a separate tab:
-        # no spool here spans more than one material group, so it labels each
-        # spool instead of splitting it. spool_counts would be 1 on every row.
-        show_table(breakdown(("iso_dwg_no", "line_no", "dwg_spool_no",
-                              "iso_run_no", "material_group"),
-                             ("ISO DWG NO", "Line No", "DWG Spool No",
-                              "ISO Run No", "Material"),
-                             spool_counts=False),
-                   "progress_by_spool_material",
-                   progress=("fitup_%", "welding_%"), money=_mny)
+        # Whole pipe spools per material, delivered vs still to go. Spools are
+        # keyed and gated exactly like the `sp` CTE behind the Delivered (count)
+        # figures above, so this ties to them. "delivered" is site delivery -
+        # the terminal state, same as the "Delivered to site" metric; a spool
+        # sitting at the painting shop still counts as balance to deliver.
+        mat = db.query(
+            f"""
+            WITH s AS (
+                -- one row per spool: a spool's material taken as its first
+                -- non-blank value in id order, so a spool whose joints
+                -- disagree lands in exactly one material row instead of
+                -- being counted twice.
+                SELECT (array_agg(nullif(trim(material_group), '') ORDER BY id)
+                          FILTER (WHERE nullif(trim(material_group), '') IS NOT NULL))[1]
+                           AS mat,
+                       bool_or(coalesce(site_delivery_date ~ '{_ISO}'
+                         AND substr(site_delivery_date,1,10) <= :asof, false)) AS delivered
+                FROM spools
+                WHERE shop_field='S'
+                GROUP BY iso_dwg_no, line_no, iso_run_no, dwg_spool_no
+            )
+            SELECT coalesce(mat,'(blank)') AS "Material",
+                   count(*)                          AS pipe_spools,
+                   count(*) FILTER (WHERE delivered) AS delivered,
+                   count(*) FILTER (WHERE NOT delivered) AS balance_to_deliver
+            FROM s GROUP BY 1 ORDER BY pipe_spools DESC
+            """,
+            {"asof": asof.isoformat()}, ttl=30,
+        )
+        pct_d = mat["delivered"] / mat["pipe_spools"].where(mat["pipe_spools"] > 0) * 100
+        mat["delivered_%"] = pct_d.round(1).fillna(0)
+        # never read 100% while a spool is still undelivered (same guard the
+        # dia-inch breakdowns use, where rounding can swallow a small balance)
+        mat.loc[mat["balance_to_deliver"] > 0, "delivered_%"] =             mat.loc[mat["balance_to_deliver"] > 0, "delivered_%"].clip(upper=99)
+        # spaced headers to match the rest of the section: show_table only
+        # de-underscores float columns, and these counts are ints
+        mat = mat.rename(columns={"pipe_spools": "Pipe spools", "delivered": "Delivered",
+                                  "balance_to_deliver": "Balance to deliver",
+                                  "delivered_%": "Delivered %"})
+        show_table(mat, "spools_by_material", progress=("Delivered %",))
 
 
 _WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
