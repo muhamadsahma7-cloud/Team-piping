@@ -1150,8 +1150,9 @@ def page_overview() -> None:
     st.subheader("Breakdown")
     st.caption("Shop spools only · `spool_done` = every joint welded by the as-of date "
                "(ties to *Total completed spools* above).")
-    t1, t2, t3, t4 = st.tabs(
-        ["By work order", "By batch no", "By area", "By size & material"])
+    t1, t2, t3, t4, t5 = st.tabs(
+        ["By work order", "By batch no", "By area", "By size & material",
+         "By pipe spool & material"])
     with t1:
         show_table(breakdown("wo_no", "wo_no"), "progress_by_wo",
                    progress=("fitup_%", "welding_%"), money=_mny)
@@ -1165,6 +1166,18 @@ def page_overview() -> None:
         show_table(breakdown(("joint_size", "material_group"), ("Size", "Material"),
                              spool_counts=False),
                    "progress_by_size_material",
+                   progress=("fitup_%", "welding_%"), money=_mny)
+    with t5:
+        # one row per pipe spool, keyed the way the spool-count CTE above keys
+        # them. material rides along as a dimension rather than a separate tab:
+        # no spool here spans more than one material group, so it labels each
+        # spool instead of splitting it. spool_counts would be 1 on every row.
+        show_table(breakdown(("iso_dwg_no", "line_no", "dwg_spool_no",
+                              "iso_run_no", "material_group"),
+                             ("ISO DWG NO", "Line No", "DWG Spool No",
+                              "ISO Run No", "Material"),
+                             spool_counts=False),
+                   "progress_by_spool_material",
                    progress=("fitup_%", "welding_%"), money=_mny)
 
 
