@@ -1078,7 +1078,8 @@ def page_overview() -> None:
         )
 
     def breakdown(dims: str | tuple[str, ...], labels: str | tuple[str, ...],
-                  *, spool_counts: bool = True) -> pd.DataFrame:
+                  *, spool_counts: bool = True,
+                  delivery: bool = False) -> pd.DataFrame:
         cols = (dims,) if isinstance(dims, str) else tuple(dims)
         labs = (labels,) if isinstance(labels, str) else tuple(labels)
         keys = [f"coalesce(nullif(trim({c}::text),''),'(blank)')" for c in cols]
@@ -1107,7 +1108,11 @@ def page_overview() -> None:
                 WITH s AS (
                     SELECT {select_keys},
                            bool_and(coalesce(welding_date ~ '{_ISO}'
-                             AND substr(welding_date,1,10) <= :asof, false)) AS welded
+                             AND substr(welding_date,1,10) <= :asof, false)) AS welded,
+                           -- site delivery, as the Delivered (count) figures
+                           -- and the Pipe spools by material tab define it
+                           bool_or(coalesce(site_delivery_date ~ '{_ISO}'
+                             AND substr(site_delivery_date,1,10) <= :asof, false)) AS delivered
                     FROM spools
                     WHERE shop_field='S'
                     -- group by the key EXPRESSIONS, not the output aliases:
@@ -1118,15 +1123,19 @@ def page_overview() -> None:
                     GROUP BY {", ".join(keys)}, iso_dwg_no, line_no, iso_run_no, dwg_spool_no
                 )
                 SELECT {", ".join(quoted_labs)}, count(*) AS spools,
-                       count(*) FILTER (WHERE welded) AS spool_done
+                       count(*) FILTER (WHERE welded) AS spool_done,
+                       count(*) FILTER (WHERE delivered) AS spool_delivered
                 FROM s GROUP BY {group_nums}
                 """,
                 {"asof": asof.isoformat()}, ttl=30,
             )
             d = d.merge(sp, on=list(labs), how="left")
-            for cc in ("spools", "spool_done"):
+            for cc in ("spools", "spool_done", "spool_delivered"):
                 d[cc] = d[cc].fillna(0).astype(int)
             extra_cols = ["spools", "spool_done"]
+            if delivery:
+                d["spool_balance_to_deliver"] = d["spools"] - d["spool_delivered"]
+                extra_cols += ["spool_delivered", "spool_balance_to_deliver"]
         for cc in ("joints", "dia_inch", "fitup_di", "welding_di"):
             d[cc] = d[cc].astype(float)
         di = d["dia_inch"].where(d["dia_inch"] > 0)
@@ -1157,10 +1166,10 @@ def page_overview() -> None:
         show_table(breakdown("wo_no", "wo_no"), "progress_by_wo",
                    progress=("fitup_%", "welding_%"), money=_mny)
     with t2:
-        show_table(breakdown("batch_no", "batch_no"), "progress_by_batch",
+        show_table(breakdown("batch_no", "batch_no", delivery=True), "progress_by_batch",
                    progress=("fitup_%", "welding_%"), money=_mny)
     with t3:
-        show_table(breakdown("area", "area"), "progress_by_area",
+        show_table(breakdown("area", "area", delivery=True), "progress_by_area",
                    progress=("fitup_%", "welding_%"), money=_mny)
     with t4:
         show_table(breakdown(("joint_size", "material_group"), ("Size", "Material"),
