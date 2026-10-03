@@ -282,7 +282,8 @@ body:not(:has(.vega-embed)) #vg-tooltip-element{display:none!important}
 # st.container(key=...) each metric row is built in; position = column.
 _KF_STAGES = {
     "kf_scope":  ("scope", "scope", "hold", "scope"),
-    "kf_wo":     ("scope", "fitup", "weld", "done"),
+    "kf_wo":     ("scope", "fitup", "weld", "weld"),
+    "kf_sched":  ("weld", "fitup", "weld", "scope"),
     "kf_output": ("fitup", "weld", "fitup", "weld"),
     "kf_rates":  ("fitup", "weld", "fitup", "weld"),
     "kf_spools": ("scope", "done", "irn", "irn"),
@@ -733,7 +734,14 @@ sp AS (
              AND substr(irn_date,1,10) <= :asof, false))                  AS irn_all,
            bool_or(coalesce(delivery_date ~ '{_ISO}'
              AND substr(delivery_date,1,10) <= :asof, false))             AS to_paint,
-           bool_or(upper(trim(coalesce(paint_status,''))) = 'YES')        AS needs_paint
+           bool_or(upper(trim(coalesce(paint_status,''))) = 'YES')        AS needs_paint,
+           -- when the spool entered its current queue, for the "oldest /
+           -- average days waiting" on the IRN and ready-to-deliver cards:
+           -- its last joint welded, its last joint IRN'd
+           max(substr(welding_date,1,10)) FILTER (WHERE welding_date ~ '{_ISO}'
+             AND substr(welding_date,1,10) <= :asof)                      AS welded_on,
+           max(substr(irn_date,1,10)) FILTER (WHERE irn_date ~ '{_ISO}'
+             AND substr(irn_date,1,10) <= :asof)                          AS irn_on
     FROM spools
     WHERE shop_field='S'
     GROUP BY iso_dwg_no, line_no, iso_run_no, dwg_spool_no
@@ -782,6 +790,22 @@ SELECT
   (SELECT count(*) FROM sp WHERE to_paint)           AS painting_spools,
   (SELECT count(*) FROM sp WHERE welded AND NOT irn_done AND needs_paint)      AS wait_irn_paint,
   (SELECT count(*) FROM sp WHERE welded AND NOT irn_done AND NOT needs_paint)  AS wait_irn_site,
+  (SELECT max(CAST(:asof AS date) - CAST(welded_on AS date)) FROM sp
+     WHERE welded AND NOT irn_done AND needs_paint)                           AS wait_irn_paint_old,
+  (SELECT avg(CAST(:asof AS date) - CAST(welded_on AS date)) FROM sp
+     WHERE welded AND NOT irn_done AND needs_paint)                           AS wait_irn_paint_avg,
+  (SELECT max(CAST(:asof AS date) - CAST(welded_on AS date)) FROM sp
+     WHERE welded AND NOT irn_done AND NOT needs_paint)                       AS wait_irn_site_old,
+  (SELECT avg(CAST(:asof AS date) - CAST(welded_on AS date)) FROM sp
+     WHERE welded AND NOT irn_done AND NOT needs_paint)                       AS wait_irn_site_avg,
+  (SELECT max(CAST(:asof AS date) - CAST(irn_on AS date)) FROM sp
+     WHERE irn_all AND needs_paint AND NOT to_paint AND NOT delivered)        AS irn_ready_paint_old,
+  (SELECT avg(CAST(:asof AS date) - CAST(irn_on AS date)) FROM sp
+     WHERE irn_all AND needs_paint AND NOT to_paint AND NOT delivered)        AS irn_ready_paint_avg,
+  (SELECT max(CAST(:asof AS date) - CAST(irn_on AS date)) FROM sp
+     WHERE irn_all AND NOT delivered AND (to_paint OR NOT needs_paint))       AS irn_ready_site_old,
+  (SELECT avg(CAST(:asof AS date) - CAST(irn_on AS date)) FROM sp
+     WHERE irn_all AND NOT delivered AND (to_paint OR NOT needs_paint))       AS irn_ready_site_avg,
   -- IRN signed off and still sitting in the shop. Same two queues the
   -- Delivery tab works from, narrowed to spools whose IRN is complete:
   -- needs paint and not sent to painting yet / due at site (already painted,
@@ -809,6 +833,7 @@ SELECT
        AND upper(trim(coalesce(workable,'')))='Y')                                            AS wo_issued,
   (SELECT coalesce(sum(joint_size),0) FROM wo)                                                AS wo_total_di,
   (SELECT coalesce(sum(joint_size),0) FROM wo WHERE fu_done IS NOT TRUE)                       AS wo_fitup_bal,
+  (SELECT coalesce(sum(joint_size),0) FROM wo WHERE wd_done IS NOT TRUE)                       AS wo_welding_bal,
   (SELECT coalesce(sum(joint_size),0) FROM wo WHERE fu_done)                                  AS wo_fitup_done,
   (SELECT coalesce(sum(joint_size),0) FROM wo WHERE wd_done)                                  AS wo_welding_done,
   (SELECT coalesce(sum(joint_size),0) FROM spools
@@ -835,6 +860,62 @@ SELECT
   (SELECT coalesce(sum(joint_size),0) FROM spools
      WHERE shop_field='S' AND lower(coalesce(status,''))='hold')                              AS hold_di
 """
+
+
+def _overview_schedule(asof: date) -> dict | None:
+    """Plan position and projected finish as of `asof`, from the Targets &
+    plan settings. Same formulas as Targets & plan's Plan vs actual table
+    (and the Weekly report): planned = scope / total working days x working
+    days elapsed, projected finish = balance / achieved-per-working-day
+    counted on from `asof` - so the two pages never disagree. None when no
+    plan is set or the plan window has no working days."""
+    cfg = db.get_settings()
+    if not (cfg.get("plan_start") and cfg.get("target_date")):
+        return None
+    plan_start = pd.to_datetime(cfg["plan_start"]).date()
+    target_date = pd.to_datetime(cfg["target_date"]).date()
+    _rr = cfg.get("rest")
+    rest_s = set(int(x) for x in _rr.split(",") if x) if _rr is not None else {6}
+    hol_s, _ = _parse_dates(cfg.get("holidays") or "")
+    scope_where = ("AND lower(coalesce(status,''))='issued' "
+                   "AND upper(trim(coalesce(workable,'')))='Y'"
+                   if cfg.get("scope", "issued") == "issued" else "")
+    total_wd = _wdays(plan_start, target_date, rest_s, hol_s)
+    if total_wd <= 0:
+        return None
+    q = db.query(
+        f"""SELECT coalesce(sum(joint_size),0) AS scope_di,
+                   coalesce(sum(joint_size) FILTER (WHERE fitup_date ~ '{_ISO}'
+                     AND substr(fitup_date,1,10) <= :asof),0)   AS fitup,
+                   coalesce(sum(joint_size) FILTER (WHERE welding_date ~ '{_ISO}'
+                     AND substr(welding_date,1,10) <= :asof),0) AS welding
+            FROM spools WHERE shop_field='S' {scope_where}""",
+        {"asof": asof.isoformat()}, ttl=30,
+    ).iloc[0]
+    scope_di = float(q["scope_di"])
+    elapsed_wd = _wdays(plan_start, min(asof, target_date), rest_s, hol_s)
+    planned = min(scope_di / total_wd * elapsed_wd, scope_di)
+    out = {"target": target_date, "scope_di": scope_di, "planned_di": planned,
+           "remain_wd": _wdays(asof + timedelta(days=1), target_date, rest_s, hol_s)}
+    for k in ("fitup", "welding"):
+        done = float(q[k])
+        balance = max(scope_di - done, 0.0)
+        achieved = done / elapsed_wd if elapsed_wd > 0 else 0.0
+        if balance <= 0:
+            proj = "done"
+        elif achieved > 0:
+            proj = _add_wdays(asof, math.ceil(balance / achieved), rest_s, hol_s)
+        else:
+            proj = None
+        # working days the projection lands after (+) / before (-) target
+        if isinstance(proj, date):
+            late = (_wdays(target_date + timedelta(days=1), proj, rest_s, hol_s)
+                    if proj > target_date
+                    else -_wdays(proj + timedelta(days=1), target_date, rest_s, hol_s))
+        else:
+            late = None
+        out[k] = {"done": done, "proj": proj, "late": late}
+    return out
 
 
 def page_overview() -> None:
@@ -864,7 +945,10 @@ def page_overview() -> None:
     f = lambda x: f"{float(x or 0):,.2f}"
 
     shop_di = float(s["shop_di"] or 0)
-    wo_welding_bal = float(s["wo_fitup_done"] or 0) - float(s["wo_welding_done"] or 0)
+    # fitted but not yet welded. This used to be shown as "WO welding
+    # balance", which read as welding left to do (560) when the real
+    # balance was 4,011 - it's the welders' ready backlog, not the balance.
+    wo_backlog = float(s["wo_fitup_done"] or 0) - float(s["wo_welding_done"] or 0)
     progress = (float(s["welding_done"] or 0) / shop_di * 100) if shop_di else 0
 
     fitup_done = float(s["fitup_done"] or 0)
@@ -908,10 +992,56 @@ def page_overview() -> None:
     r2[1].metric("WO fit-up balance", f(s["wo_fitup_bal"]), border=True,
                  help="Issued, workable dia-inch with no fit-up date yet. "
                       "Straight pipe is excluded — it's ready without one.")
-    r2[2].metric("WO welding balance", f(wo_welding_bal), border=True)
-    r2[3].metric("Current progress", f"{progress:.1f}%",
-                 delta=f"{progress - 100:.1f}% to target", delta_color="off", border=True,
-                 help="Welding done as a share of total shop dia-inch.")
+    r2[2].metric("WO welding balance", f(s["wo_welding_bal"]), border=True,
+                 help="Issued, workable dia-inch not welded yet - built the same way "
+                      "as the fit-up balance. Straight pipe is excluded.")
+    r2[3].metric("Welding backlog", f(wo_backlog), border=True,
+                 help="Fitted but not welded yet: work the welders can start on now "
+                      "(WO fit-up done − WO welding done).")
+
+    # Schedule against the Targets & plan settings - same formulas as that
+    # page's Plan vs actual table, counted to the as-of date.
+    st.subheader("Schedule")
+    sched = _overview_schedule(asof)
+    r5 = st.container(key="kf_sched").columns(4)
+
+    def _proj(k: str, label: str, col) -> None:
+        d = sched[k] if sched else None
+        if d is None:
+            col.metric(label, "—", border=True, help="Needs a plan on Targets & plan.")
+            return
+        p_, late = d["proj"], d["late"]
+        val = ("Done" if p_ == "done" else "—" if p_ is None else f"{p_:%d %b %Y}")
+        delta = (None if late is None else "on the target date" if late == 0
+                 else f"+{late} working days late" if late > 0
+                 else f"{late} working days early")
+        col.metric(label, val, delta, delta_color="inverse" if late else "off", border=True,
+                   help="Balance ÷ dia-inch achieved per working day so far, counted "
+                        "on in working days from the as-of date (rest days and "
+                        "holidays from Targets & plan). Same as Projected finish there.")
+
+    if sched and sched["scope_di"] > 0:
+        act_pct = sched["welding"]["done"] / sched["scope_di"] * 100
+        plan_pct = sched["planned_di"] / sched["scope_di"] * 100
+        r5[0].metric("Welding vs plan", f"{act_pct:.1f}%",
+                     f"{act_pct - plan_pct:+.1f}% vs plan {plan_pct:.1f}%", border=True,
+                     help="Welded share of the plan scope against the planned share for "
+                          "the as-of date (scope ÷ total working days × working days "
+                          "elapsed) - the Planned to date on Targets & plan.")
+    else:
+        r5[0].metric("Welding progress", f"{progress:.1f}%", "no plan set",
+                     delta_color="off", border=True,
+                     help="Welding done as a share of total shop dia-inch. Set a plan "
+                          "on Targets & plan to compare it against.")
+    _proj("fitup", "Projected fit-up finish", r5[1])
+    _proj("welding", "Projected welding finish", r5[2])
+    if sched:
+        r5[3].metric("Target completion", f"{sched['target']:%d %b %Y}",
+                     f"{sched['remain_wd']} working days left", delta_color="off",
+                     border=True)
+    else:
+        r5[3].metric("Target completion", "—", border=True,
+                     help="Set one on Targets & plan.")
 
     st.subheader("Output (dia-inch)")
     r3 = st.container(key="kf_output").columns(4)
@@ -941,6 +1071,15 @@ def page_overview() -> None:
     srn = int(s["straight_ready_nonpaint"] or 0)
     ssd = int(s["straight_delivered_site"] or 0)
     pct = lambda n: (f"{n / tsp * 100:.0f}%" if tsp else None)
+
+    def waited(n: int, key: str) -> str | None:
+        """Share of spools plus how long the queue has been waiting, in
+        calendar days to the as-of date - the count alone hides whether 300
+        spools arrived yesterday or have sat there for a month."""
+        old, avg = s[f"{key}_old"], s[f"{key}_avg"]
+        if not n or old is None or pd.isna(old):
+            return pct(n)
+        return f"{pct(n)} · oldest {int(old)} d, avg {float(avg):.0f} d"
     # % of straight pipe, not of all spools: the straight-pipe figures count
     # field-run straight pipe too, which isn't in the shop-only total_spools,
     # so that denominator could read over 100%. Against straight pipe they're
@@ -953,28 +1092,33 @@ def page_overview() -> None:
     a[0].metric("Total pipe spools", f"{tsp:,}", border=True)
     a[1].metric("Total completed spools", f"{csp:,}", pct(csp),
                 delta_color="off", border=True)
-    a[2].metric("Waiting for QC IRN — painting", f"{wip:,}", pct(wip),
+    a[2].metric("Waiting for QC IRN — painting", f"{wip:,}", waited(wip, "wait_irn_paint"),
                 delta_color="off", border=True,
-                help="Welded, needs painting (paint status = Yes), no IRN yet.")
-    a[3].metric("Waiting for QC IRN — site delivery", f"{wis:,}", pct(wis),
+                help="Welded, needs painting (paint status = Yes), no IRN yet. "
+                     "Days waiting count from the spool's last weld.")
+    a[3].metric("Waiting for QC IRN — site delivery", f"{wis:,}", waited(wis, "wait_irn_site"),
                 delta_color="off", border=True,
-                help="Welded, no painting required (paint status ≠ Yes), no IRN yet.")
+                help="Welded, no painting required (paint status ≠ Yes), no IRN yet. "
+                     "Days waiting count from the spool's last weld.")
 
     st.subheader("Ready to deliver (count)")
     st.caption("Signed off and still in the shop. The first two are the Delivery "
                "worklists limited to IRN-complete spools; straight pipe is shown "
                "separately because it's release-ready without fit-up or welding.")
     i_ = st.container(key="kf_ready").columns(4)
-    i_[0].metric("IRN done, ready — painting", f"{irp:,}", pct(irp),
+    i_[0].metric("IRN done, ready — painting", f"{irp:,}", waited(irp, "irn_ready_paint"),
                 delta_color="off", border=True,
                 help="Every joint IRN'd, needs painting (paint status = Yes), "
                      "not sent to painting or site yet. Matches the Painting "
-                     "delivery worklist, limited to IRN-complete spools.")
-    i_[1].metric("IRN done, ready — site", f"{irs:,}", pct(irs),
+                     "delivery worklist, limited to IRN-complete spools. Days waiting "
+                     "count from the spool's last IRN.")
+    i_[1].metric("IRN done, ready — site", f"{irs:,}", waited(irs, "irn_ready_site"),
                 delta_color="off", border=True,
                 help="Every joint IRN'd and due at site — already sent to painting, "
                      "or no painting required — but not sent to site yet. Matches "
-                     "the Site delivery worklist, limited to IRN-complete spools.")
+                     "the Site delivery worklist, limited to IRN-complete spools. Days "
+                     "waiting count from the spool's last IRN (a painted spool's "
+                     "return from painting isn't recorded).")
     i_[2].metric("Straight pipe ready — painting", f"{srp:,}", spct(srp),
                 delta_color="off", border=True,
                 help="Straight pipe (Spool type) on an issued work order, needs "
