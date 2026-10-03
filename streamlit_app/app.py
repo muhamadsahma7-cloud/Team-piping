@@ -249,9 +249,15 @@ div[data-testid="stDataFrame"],div[data-testid="stTable"]{border:1px solid var(-
 div[data-testid="stAlert"]{border-radius:10px}
 /* Colour the FILL, not the track. This used to paint the track green and
    leave the fill default blue, so the unfilled remainder read as "done" -
-   a 0% bar (Delivery, before anything ships) looked entirely complete. */
-[data-testid="stProgress"]>div>div>div{background:var(--line)}
-[data-testid="stProgress"]>div>div>div>div{background:var(--accent2)}
+   a 0% bar (Delivery, before anything ships) looked entirely complete.
+   Located structurally, not by depth: the fill is the one empty div inside
+   role=progressbar and the track is its parent (:empty rather than a nested
+   :has(), which CSS forbids - the browser drops the whole rule). Streamlit 1.48 nests that
+   one wrapper deeper than 1.65 does, and a fixed >div>div>div path that
+   hit the track on one version hit the FILL on the other, painting every
+   bar solid grey on a deployment that pulled a newer Streamlit. */
+[data-testid="stProgress"] [role="progressbar"] div:has(>div:empty){background:var(--line)}
+[data-testid="stProgress"] [role="progressbar"] div:empty{background:var(--accent2)}
 hr{margin:1rem 0;border-color:var(--line)}
 /* Vega hangs its tooltip off <body>, outside Streamlit's element tree, so it
    survives a rerun that removes the chart: hover a bar on the Weekly report,
@@ -284,7 +290,7 @@ _STATIC_CSS += "".join(
 
 # Overview progress bars, coloured to match: fill only, the track stays --line
 _STATIC_CSS += "".join(
-    f'.st-key-pg_{k} [data-testid="stProgress"]>div>div>div>div'
+    f'.st-key-pg_{k} [data-testid="stProgress"] [role="progressbar"] div:empty'
     f"{{background:var(--st_{k})}}"
     for k in ("fitup", "weld", "done")
 )
