@@ -176,6 +176,9 @@ _TOK_DARK = {
     "pillact": "rgba(77,141,255,.20)", "pillactbd": "rgba(77,141,255,.55)",
     "sbshadow": "0 2px 14px rgba(0,0,0,.35)", "pillshadow": "0 1px 8px rgba(0,0,0,.3)",
     "dlshadow": "rgba(77,141,255,.28)",
+    # stage colours (Overview card accents) - brighter on dark so they hold contrast
+    "st_scope": "#94a3b8", "st_fitup": "#fbbf24", "st_weld": "#4d8dff",
+    "st_irn": "#a78bfa", "st_paint": "#fb923c", "st_done": "#34d399", "st_hold": "#fb7185",
 }
 _TOK_LIGHT = {
     "accent": "#2f6feb", "accent2": "#12b886", "ink": "#1f2933", "text": "#1f2933",
@@ -191,6 +194,8 @@ _TOK_LIGHT = {
     "pillact": "rgba(47,111,235,.12)", "pillactbd": "rgba(47,111,235,.42)",
     "sbshadow": "0 2px 10px rgba(15,23,42,.06)", "pillshadow": "0 1px 6px rgba(15,23,42,.05)",
     "dlshadow": "rgba(47,111,235,.22)",
+    "st_scope": "#64748b", "st_fitup": "#f59e0b", "st_weld": "#2f6feb",
+    "st_irn": "#8b5cf6", "st_paint": "#f97316", "st_done": "#10b981", "st_hold": "#f43f5e",
 }
 
 _STATIC_CSS = """
@@ -255,6 +260,27 @@ hr{margin:1rem 0;border-color:var(--line)}
    means any tooltip still up is stale, so hide it. */
 body:not(:has(.vega-embed)) #vg-tooltip-element{display:none!important}
 """
+
+
+# Overview key figures: each card's left border takes the colour of the stage
+# it measures (fit-up amber, welding blue, IRN violet, painting orange,
+# done/delivered green, hold rose, scope slate). Colour stays on that 4px
+# edge only - card faces, text and page stay neutral. Keys are the
+# st.container(key=...) each metric row is built in; position = column.
+_KF_STAGES = {
+    "kf_scope":  ("scope", "scope", "hold", "scope"),
+    "kf_wo":     ("scope", "fitup", "weld", "done"),
+    "kf_output": ("fitup", "weld", "fitup", "weld"),
+    "kf_rates":  ("fitup", "weld", "fitup", "weld"),
+    "kf_spools": ("scope", "done", "irn", "irn"),
+    "kf_ready":  ("paint", "done", "paint", "done"),
+    "kf_deliv":  ("paint", "done", "done"),
+}
+_STATIC_CSS += "".join(
+    f'.st-key-{key} [data-testid="stColumn"]:nth-child({i}) [data-testid="stMetric"]'
+    f"{{border-left-color:var(--st_{stage})}}\n"
+    for key, stages in _KF_STAGES.items() for i, stage in enumerate(stages, 1)
+)
 
 
 _FORCE_TMPL = """
@@ -889,7 +915,7 @@ def page_overview() -> None:
     day_lbl = "Today's" if is_today else asof.isoformat()
 
     st.subheader("Work scope (dia-inch)")
-    r1 = st.columns(4)
+    r1 = st.container(key="kf_scope").columns(4)
     r1[0].metric("Total shop dia-inch", f(s["shop_di"]), border=True)
     r1[1].metric("Total field dia-inch", f(s["field_di"]), border=True)
     r1[2].metric("Hold dia-inch", f(s["hold_di"]), border=True,
@@ -898,7 +924,7 @@ def page_overview() -> None:
                  help="Distinct work orders that are issued and workable.")
 
     st.subheader("Work order progress (dia-inch)")
-    r2 = st.columns(4)
+    r2 = st.container(key="kf_wo").columns(4)
     r2[0].metric("WO total dia-inch", f(s["wo_total_di"]), border=True)
     r2[1].metric("WO fit-up balance", f(s["wo_fitup_bal"]), border=True,
                  help="Issued, workable dia-inch with no fit-up date yet. "
@@ -909,7 +935,7 @@ def page_overview() -> None:
                  help="Welding done as a share of total shop dia-inch.")
 
     st.subheader("Output (dia-inch)")
-    r3 = st.columns(4)
+    r3 = st.container(key="kf_output").columns(4)
     r3[0].metric(f"{day_lbl} fit-up", f(s["today_fitup"]), border=True)
     r3[1].metric(f"{day_lbl} welding", f(s["today_welding"]), border=True)
     r3[2].metric("Fit-up done", f(s["fitup_done"]), border=True,
@@ -918,7 +944,7 @@ def page_overview() -> None:
                  help="Cumulative, up to the as-of date.")
 
     st.subheader("Rates (dia-inch)")
-    r4 = st.columns(4)
+    r4 = st.container(key="kf_rates").columns(4)
     r4[0].metric("Avg fit-up / day", f(s["avg_fitup_day"]), border=True)
     r4[1].metric("Avg welding / day", f(s["avg_welding_day"]), border=True)
     r4[2].metric("Avg fit-up / fitter", f(s["avg_fitup_fitter"]), border=True)
@@ -944,7 +970,7 @@ def page_overview() -> None:
     spct = lambda n: (f"{n / stot * 100:.0f}% of straight pipe" if stot else None)
 
     st.subheader("Spool status (count)")
-    a = st.columns(4)
+    a = st.container(key="kf_spools").columns(4)
     a[0].metric("Total pipe spools", f"{tsp:,}", border=True)
     a[1].metric("Total completed spools", f"{csp:,}", pct(csp),
                 delta_color="off", border=True)
@@ -959,7 +985,7 @@ def page_overview() -> None:
     st.caption("Signed off and still in the shop. The first two are the Delivery "
                "worklists limited to IRN-complete spools; straight pipe is shown "
                "separately because it's release-ready without fit-up or welding.")
-    i_ = st.columns(4)
+    i_ = st.container(key="kf_ready").columns(4)
     i_[0].metric("IRN done, ready — painting", f"{irp:,}", pct(irp),
                 delta_color="off", border=True,
                 help="Every joint IRN'd, needs painting (paint status = Yes), "
@@ -980,7 +1006,7 @@ def page_overview() -> None:
                      "painting required, not yet sent to painting or site.")
 
     st.subheader("Delivered (count)")
-    b = st.columns(4)
+    b = st.container(key="kf_deliv").columns(4)
     b[0].metric("Delivered to painting shop", f"{psp:,}", pct(psp),
                 delta_color="off", border=True,
                 help="Spools with a painting delivery date (delivery_date).")
