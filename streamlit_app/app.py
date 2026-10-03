@@ -19,6 +19,7 @@ import re
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 MYT = ZoneInfo("Asia/Kuala_Lumpur")
@@ -151,16 +152,6 @@ BRAND_HTML = (
     "color:var(--accent,#4d8dff);margin-top:3px'>NAEC MALAYSIA SDN BHD</div></div>"
 )
 
-PAGE_ICONS = {
-    "Overview": "📊", "Targets & plan": "🎯", "Work order summary": "📋",
-    "Weekly report": "🗓️", "Monthly report": "📅",
-    "Update progress": "✏️", "QC update": "🔍", "Scan & update": "📲",
-    "Field workers": "🦺",
-    "QR labels": "🏷️", "Delivery": "🚚", "Spools": "🔩",
-    "Classify & export": "🗂️", "QC WCS": "🧾", "Inventory": "📦", "Manpower": "👷",
-    "Activity": "📜", "Data admin": "🛠️", "Users": "👥",
-}
-
 
 _TOK_DARK = {
     "accent": "#4d8dff", "accent2": "#22c55e", "ink": "#f1f5f9", "text": "#e2e8f0",
@@ -171,10 +162,9 @@ _TOK_DARK = {
     "sb1": "#152036", "sb2": "#111a2e", "sb3": "#161327",
     "glass": "rgba(255,255,255,.06)", "glassbd": "rgba(255,255,255,.12)",
     "glasshov": "rgba(77,141,255,.18)",
-    "pill": "rgba(255,255,255,.045)", "pillbd": "rgba(255,255,255,.08)",
     "pillhov": "rgba(255,255,255,.09)",
-    "pillact": "rgba(77,141,255,.20)", "pillactbd": "rgba(77,141,255,.55)",
-    "sbshadow": "0 2px 14px rgba(0,0,0,.35)", "pillshadow": "0 1px 8px rgba(0,0,0,.3)",
+    "pillact": "rgba(77,141,255,.20)",
+    "sbshadow": "0 2px 14px rgba(0,0,0,.35)",
     "dlshadow": "rgba(77,141,255,.28)",
     # stage colours (Overview card accents) - brighter on dark so they hold contrast
     "st_scope": "#94a3b8", "st_fitup": "#fbbf24", "st_weld": "#4d8dff",
@@ -189,10 +179,9 @@ _TOK_LIGHT = {
     "sb1": "#eef3fb", "sb2": "#f3f6fc", "sb3": "#f0f2fb",
     "glass": "rgba(255,255,255,.72)", "glassbd": "rgba(15,23,42,.10)",
     "glasshov": "rgba(47,111,235,.10)",
-    "pill": "rgba(255,255,255,.62)", "pillbd": "rgba(15,23,42,.08)",
     "pillhov": "rgba(255,255,255,.9)",
-    "pillact": "rgba(47,111,235,.12)", "pillactbd": "rgba(47,111,235,.42)",
-    "sbshadow": "0 2px 10px rgba(15,23,42,.06)", "pillshadow": "0 1px 6px rgba(15,23,42,.05)",
+    "pillact": "rgba(47,111,235,.12)",
+    "sbshadow": "0 2px 10px rgba(15,23,42,.06)",
     "dlshadow": "rgba(47,111,235,.22)",
     "st_scope": "#64748b", "st_fitup": "#f59e0b", "st_weld": "#2f6feb",
     "st_irn": "#8b5cf6", "st_paint": "#f97316", "st_done": "#10b981", "st_hold": "#f43f5e",
@@ -218,15 +207,33 @@ section[data-testid="stSidebar"] .stButton>button{
   border:1px solid var(--glassbd);box-shadow:var(--sbshadow);border-radius:12px;color:var(--ink)}
 section[data-testid="stSidebar"] .stButton>button:hover{
   background:var(--glasshov);border-color:var(--accent);color:var(--accent)}
-section[data-testid="stSidebar"] [role="radiogroup"]>label{
-  background:var(--pill);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);
-  border:1px solid var(--pillbd);box-shadow:var(--pillshadow);border-radius:11px;
-  padding:.5rem .7rem!important;margin-bottom:6px;
-  transition:background .15s ease,border-color .15s ease,box-shadow .15s ease}
-section[data-testid="stSidebar"] [role="radiogroup"]>label:hover{background:var(--pillhov)}
-section[data-testid="stSidebar"] [role="radiogroup"]>label:has(input:checked){
-  background:var(--pillact);border-color:var(--pillactbd);box-shadow:0 2px 16px var(--pillact)}
-section[data-testid="stSidebar"] [role="radiogroup"]>label>div:first-child{display:none}
+/* sidebar nav: small group labels, plain links, the active one tinted with
+   an accent edge. Links are st.page_link; .st-key-tp_nav_on is the keyed
+   container the active link is drawn in. */
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]{gap:.12rem}
+/* markdown blocks carry -1rem bottom margin to cancel Streamlit's default
+   1rem gap; with the tighter gap above that would overlap the next row */
+section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"]{margin-bottom:0!important}
+.tp-navgrp{font-size:.66rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--muted);margin:1rem 0 .2rem .6rem}
+section[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"]{
+  background:transparent!important;border-radius:8px;margin:0;
+  padding:.3rem .6rem;border-left:3px solid transparent;transition:background .12s ease}
+section[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"]:hover{background:var(--pillhov)!important}
+section[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"] p{color:var(--text)!important;font-weight:500}
+section[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"] [data-testid="stIconMaterial"]{color:var(--muted)!important}
+section[data-testid="stSidebar"] .st-key-tp_nav_on a[data-testid="stPageLink-NavLink"]{
+  background:var(--pillact)!important;border-left-color:var(--accent)}
+section[data-testid="stSidebar"] .st-key-tp_nav_on a[data-testid="stPageLink-NavLink"] p,
+section[data-testid="stSidebar"] .st-key-tp_nav_on a[data-testid="stPageLink-NavLink"] [data-testid="stIconMaterial"]{
+  color:var(--accent)!important;font-weight:650}
+.tp-acct{display:flex;align-items:center;gap:.65rem;margin:1.2rem 0 .45rem;
+  padding-top:1rem;border-top:1px solid var(--line)}
+.tp-av{flex:none;width:34px;height:34px;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;font-weight:700;background:var(--pillact);color:var(--accent)}
+.tp-who{line-height:1.25;color:var(--ink);font-size:.9rem;min-width:0}
+.tp-who span{display:block;color:var(--muted);font-size:.76rem}
+section[data-testid="stSidebar"] .st-key-tp_signout button{min-height:2.15rem;padding:.2rem .6rem}
 div[data-testid="stMetric"]{
   background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent);
   border-radius:12px;padding:14px 16px}
@@ -557,6 +564,17 @@ inject_css()
 _qs = st.query_params.get("scan")
 if _qs and _qs != st.session_state.get("_scan_dismissed"):
     st.session_state["pending_scan"] = _qs
+# Same for a direct page link (/weekly-report) opened while signed out: the
+# login screen runs before st.navigation exists, so the requested page would
+# be lost and sign-in would land on Overview. Remember it; the navigation
+# block at the bottom of the file goes there once the user is in.
+if not st.session_state.get("user"):
+    try:
+        _req = urlparse(st.context.url).path.strip("/").rsplit("/", 1)[-1]
+    except Exception:
+        _req = ""
+    if _req:
+        st.session_state["pending_path"] = _req
 logout_splash()
 kiosk_auth()          # QR with &k=<token> signs in silently, before the gate
 login_gate()
@@ -636,14 +654,15 @@ def sidebar_clock() -> None:
     countdown = ""
     if la is not None and IDLE_LIMIT_S - (time.time() - la) <= 60:
         left = max(0, int(IDLE_LIMIT_S - (time.time() - la)))
-        countdown = (f"<br><span style='font-size:11px;color:#e0a83a'>"
+        countdown = (f"<br><span style='font-size:11px;color:var(--st_fitup)'>"
                      f"Auto sign-out in {left // 60}:{left % 60:02d}</span>")
     st.markdown(
         "<div style='font-family:ui-monospace,SFMono-Regular,Menlo,monospace;"
-        "letter-spacing:.06em;color:#8aa0bd;line-height:1.55;padding:2px 0 4px'>"
-        f"{now:%A, %d %b %Y}<br>"
-        f"<span style='font-size:18px;font-weight:700;color:#4d8dff'>{now:%H:%M:%S}</span>"
-        f" <span style='font-size:11px;color:#6b7a90'>MYT</span>{countdown}</div>",
+        "font-size:12px;letter-spacing:.04em;color:var(--muted);line-height:1.5;"
+        "padding:0 0 2px'>"
+        f"{now:%a %d %b}  ·  "
+        f"<span style='font-weight:700;color:var(--accent)'>{now:%H:%M:%S}</span>"
+        f" MYT{countdown}</div>",
         unsafe_allow_html=True,
     )
 
@@ -651,67 +670,9 @@ def sidebar_clock() -> None:
 with st.sidebar:
     st.session_state["last_active"] = time.time()   # every real (interaction) rerun
     st.markdown(BRAND_HTML, unsafe_allow_html=True)
-    if st.session_state.get("project"):
-        st.caption(f"Project: **{st.session_state['project']}**")
-    st.caption(f"Signed in as **{st.session_state['user']}**"
-               + ("  ·  kiosk" if st.session_state.get("kiosk") else ""))
-    if st.button("Sign out", use_container_width=True):
-        st.cache_data.clear()
-        st.session_state.clear()
-        st.session_state["just_logged_out"] = True
-        try:                       # drop &k / &scan so a kiosk QR doesn't re-auth
-            st.query_params.clear()
-        except Exception:
-            pass
-        st.rerun()
     sidebar_clock()
-    st.divider()
-    _perm = st.session_state.get("permission", "")
-    visible = [p for p in PAGE_PERMS if can_see(p, _perm)] or ["Overview"]
-
-    # A scanned spool QR (?scan=<code>, stashed into pending_scan up top so
-    # it survives the login / wake round-trip) pins the nav to Scan &
-    # update. Decide this BEFORE the radio so the widget actually shows it
-    # selected - then tapping any other tab is a real change and the
-    # on_change handler can release the pin.
-    _sc = st.session_state.get("pending_scan")
-    if _sc and "Scan & update" in visible:
-        if st.query_params.get("scan") != _sc:
-            st.query_params["scan"] = _sc          # heal URL after login / wake
-        st.session_state["nav"] = "Scan & update"
-
-    def _leave_scan() -> None:            # picking a tab drops the pending scan
-        st.session_state["_scan_dismissed"] = st.session_state.pop("pending_scan", None)
-        for _drop in (lambda: st.query_params.pop("scan", None),
-                      lambda: st.query_params.__delitem__("scan")):
-            try:
-                _drop()
-                break
-            except Exception:
-                pass
-
-    page = st.radio("Page", visible, label_visibility="collapsed", key="nav",
-                    on_change=_leave_scan,
-                    format_func=lambda p: f"{PAGE_ICONS.get(p, '•')}  {p}")
-    st.divider()
-    _cur = "Dark" if is_dark() else "Light"
-    _pick = st.segmented_control(
-        "Appearance", ["Light", "Dark"], default=_cur,
-        selection_mode="single", key="theme_seg", label_visibility="collapsed",
-    ) or _cur
-    _new = _pick.lower()
-    # only persist on a real user pick - not the first-load default
-    # reconciliation, which would otherwise write ?theme= and rerun on
-    # every fresh session (and race with the ?scan= param)
-    if _new != ("dark" if is_dark() else "light"):
-        st.session_state["theme_choice"] = _new
-        st.query_params["theme"] = _new
-        st.rerun()
-
-# guard against a stale / disallowed selection
-if not can_see(page, st.session_state.get("permission", "")):
-    st.warning("You don't have access to that page.")
-    st.stop()
+# The page links, account card, theme switch and Sign out are drawn at the
+# bottom of this file, once the page functions exist for st.navigation.
 
 
 # --------------------------------------------------------------- pages
@@ -4804,7 +4765,14 @@ def page_manpower() -> None:
                 st.rerun()
 
 
-{
+
+# --------------------------------------------------------------- navigation
+# Native st.navigation, hidden, with the sidebar drawn from st.page_link in
+# groups. Replaces a CSS-styled st.radio whose pill styling silently fell
+# apart on a newer Streamlit (plain radio dots on the deployed app) - page
+# links are first-class widgets, so there's no DOM-depth CSS to break, and
+# each page gets its own URL (bookmarks, browser Back).
+_PAGE_FUNCS = {
     "Overview": page_overview,
     "Targets & plan": page_targets,
     "Work order summary": page_wo_summary,
@@ -4824,4 +4792,136 @@ def page_manpower() -> None:
     "Activity": page_activity,
     "Data admin": page_admin,
     "Users": page_users,
-}[page]()
+}
+# display groups, in order; every page in PAGE_PERMS sits in exactly one
+_NAV_GROUPS = {
+    "Dashboards": ["Overview", "Targets & plan", "Work order summary",
+                   "Weekly report", "Monthly report"],
+    "Shop floor": ["Update progress", "QC update", "Scan & update",
+                   "Field workers", "QR labels"],
+    "Records":    ["Delivery", "Spools", "Classify & export", "QC WCS",
+                   "Inventory", "Manpower"],
+    "Admin":      ["Activity", "Data admin", "Users"],
+}
+# Material line icons: render the same on every device, unlike emoji
+_NAV_ICONS = {
+    "Overview": ":material/space_dashboard:",
+    "Targets & plan": ":material/flag:",
+    "Work order summary": ":material/assignment:",
+    "Weekly report": ":material/date_range:",
+    "Monthly report": ":material/calendar_month:",
+    "Update progress": ":material/edit_note:",
+    "QC update": ":material/fact_check:",
+    "Scan & update": ":material/qr_code_scanner:",
+    "Field workers": ":material/engineering:",
+    "QR labels": ":material/qr_code_2:",
+    "Delivery": ":material/local_shipping:",
+    "Spools": ":material/view_list:",
+    "Classify & export": ":material/category:",
+    "QC WCS": ":material/verified:",
+    "Inventory": ":material/inventory_2:",
+    "Manpower": ":material/groups:",
+    "Activity": ":material/history:",
+    "Data admin": ":material/database:",
+    "Users": ":material/manage_accounts:",
+}
+assert set(_PAGE_FUNCS) == set(PAGE_PERMS) == {n for g in _NAV_GROUPS.values() for n in g}
+
+_perm = st.session_state.get("permission", "")
+_visible = [p for p in PAGE_PERMS if can_see(p, _perm)] or ["Overview"]
+# only permitted pages are registered, so a URL to anything else can't open
+# it - Streamlit falls back to the default page instead
+_pages = {
+    n: st.Page(_PAGE_FUNCS[n], title=n, icon=_NAV_ICONS[n],
+               url_path=re.sub(r"[^a-z0-9]+", "-", n.lower()).strip("-"),
+               default=(n == _visible[0]))
+    for n in _visible
+}
+pg = st.navigation(list(_pages.values()), position="hidden")
+
+# A scanned spool QR (?scan=<code>, stashed into pending_scan up top so it
+# survives the login / wake round-trip) sends the user to Scan & update -
+# once per code, so they can still navigate away; leaving the page drops
+# the pending scan and the ?scan= param, same as picking another tab did.
+_sc = st.session_state.get("pending_scan")
+if _sc and "Scan & update" in _pages:
+    if st.session_state.get("_scan_routed") != _sc:
+        st.session_state["_scan_routed"] = _sc
+        if pg.title != "Scan & update":
+            st.switch_page(_pages["Scan & update"])
+    elif pg.title == "Scan & update":
+        if st.query_params.get("scan") != _sc:
+            st.query_params["scan"] = _sc          # heal URL after login / wake
+    else:
+        st.session_state["_scan_dismissed"] = st.session_state.pop("pending_scan", None)
+        for _drop in (lambda: st.query_params.pop("scan", None),
+                      lambda: st.query_params.__delitem__("scan")):
+            try:
+                _drop()
+                break
+            except Exception:
+                pass
+
+# page asked for by URL before signing in (see pending_path up top). A
+# pending scan wins - that's an explicit QR action. Pages the user may not
+# open aren't registered, so they simply don't match and Overview stays.
+_pp = st.session_state.pop("pending_path", None)
+if _pp and not st.session_state.get("pending_scan"):
+    _target = next((x for x in _pages.values() if x.url_path == _pp), None)
+    if _target is not None and _target.title != pg.title:
+        st.switch_page(_target)
+
+with st.sidebar:
+    for _grp, _names in _NAV_GROUPS.items():
+        _shown = [n for n in _names if n in _pages]
+        if not _shown:                    # e.g. a shop-floor account sees one group
+            continue
+        st.markdown(f"<div class='tp-navgrp'>{_grp}</div>", unsafe_allow_html=True)
+        for n in _shown:
+            # Streamlit marks the current page link only with a generated
+            # class, so the active one is wrapped in a keyed container to
+            # give the CSS a stable hook (.st-key-tp_nav_on)
+            (st.container(key="tp_nav_on") if n == pg.title else st).page_link(
+                _pages[n], label=n, icon=_NAV_ICONS[n])
+
+    # account card: who / which project, then theme + sign out side by side
+    _u = str(st.session_state.get("user", ""))
+    _sub = " · ".join(x for x in (st.session_state.get("project"),
+                                  "kiosk" if st.session_state.get("kiosk") else None) if x)
+    st.markdown(
+        "<div class='tp-acct'>"
+        f"<div class='tp-av'>{html.escape(_u[:1].upper() or '?')}</div>"
+        f"<div class='tp-who'><b>{html.escape(_u)}</b>"
+        + (f"<span>{html.escape(_sub)}</span>" if _sub else "")
+        + "</div></div>",
+        unsafe_allow_html=True,
+    )
+    _c1, _c2 = st.columns([1, 1.15], vertical_alignment="center")
+    with _c1:
+        _cur = "Dark" if is_dark() else "Light"
+        _pick = st.segmented_control(
+            "Appearance", ["Light", "Dark"], default=_cur,
+            format_func=lambda o: ":material/light_mode:" if o == "Light"
+                                  else ":material/dark_mode:",
+            selection_mode="single", key="theme_seg", label_visibility="collapsed",
+        ) or _cur
+        _new = _pick.lower()
+        # only persist on a real user pick - not the first-load default
+        # reconciliation, which would otherwise write ?theme= and rerun on
+        # every fresh session (and race with the ?scan= param)
+        if _new != ("dark" if is_dark() else "light"):
+            st.session_state["theme_choice"] = _new
+            st.query_params["theme"] = _new
+            st.rerun()
+    with _c2.container(key="tp_signout"):
+        if st.button("Sign out", icon=":material/logout:", use_container_width=True):
+            st.cache_data.clear()
+            st.session_state.clear()
+            st.session_state["just_logged_out"] = True
+            try:                   # drop &k / &scan so a kiosk QR doesn't re-auth
+                st.query_params.clear()
+            except Exception:
+                pass
+            st.rerun()
+
+pg.run()
