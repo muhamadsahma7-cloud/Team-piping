@@ -282,6 +282,13 @@ _STATIC_CSS += "".join(
     for key, stages in _KF_STAGES.items() for i, stage in enumerate(stages, 1)
 )
 
+# Overview progress bars, coloured to match: fill only, the track stays --line
+_STATIC_CSS += "".join(
+    f'.st-key-pg_{k} [data-testid="stProgress"]>div>div>div>div'
+    f"{{background:var(--st_{k})}}"
+    for k in ("fitup", "weld", "done")
+)
+
 
 _FORCE_TMPL = """
 .stApp,[data-testid="stAppViewContainer"],[data-testid="stMain"]{
@@ -898,15 +905,20 @@ def page_overview() -> None:
     delivered_di = float(s["delivered_di"] or 0)
 
     st.subheader("Progress (shop dia-inch)")
+    # same stage colours as the key-figure cards below: fit-up amber, welding
+    # blue, delivery green. Altair needs real hex, not CSS vars, so read the
+    # active theme's tokens; the bars pick theirs up via _PG_STAGES CSS.
+    tok = _TOK_DARK if is_dark() else _TOK_LIGHT
     dc = st.columns(3)
-    donut_block(dc[0], "Fit-up", fitup_done, shop_di, "#5ea0ff")
-    donut_block(dc[1], "Welding", welding_done, shop_di, "#34d399")
-    donut_block(dc[2], "Delivery", delivered_di, shop_di, "#fbbf24")
-    for label, val in [("Fit-up", fitup_done), ("Welding", welding_done),
-                       ("Delivery", delivered_di)]:
+    donut_block(dc[0], "Fit-up", fitup_done, shop_di, tok["st_fitup"])
+    donut_block(dc[1], "Welding", welding_done, shop_di, tok["st_weld"])
+    donut_block(dc[2], "Delivery", delivered_di, shop_di, tok["st_done"])
+    for label, val, key in [("Fit-up", fitup_done, "pg_fitup"),
+                            ("Welding", welding_done, "pg_weld"),
+                            ("Delivery", delivered_di, "pg_done")]:
         pct = (val / shop_di) if shop_di else 0
-        st.progress(min(pct, 1.0),
-                    text=f"{label}: {val:,.2f} / {shop_di:,.2f}  ({pct*100:.1f}%)")
+        st.container(key=key).progress(
+            min(pct, 1.0), text=f"{label}: {val:,.2f} / {shop_di:,.2f}  ({pct*100:.1f}%)")
 
     # Key figures, grouped. 27 tiles under one heading in rows of 6/5/5/3/3/3/3
     # was a wall to scan - dia-inch totals, rates and spool counts all mixed
