@@ -999,50 +999,6 @@ def page_overview() -> None:
                  help="Fitted but not welded yet: work the welders can start on now "
                       "(WO fit-up done − WO welding done).")
 
-    # Schedule against the Targets & plan settings - same formulas as that
-    # page's Plan vs actual table, counted to the as-of date.
-    st.subheader("Schedule")
-    sched = _overview_schedule(asof)
-    r5 = st.container(key="kf_sched").columns(4)
-
-    def _proj(k: str, label: str, col) -> None:
-        d = sched[k] if sched else None
-        if d is None:
-            col.metric(label, "—", border=True, help="Needs a plan on Targets & plan.")
-            return
-        p_, late = d["proj"], d["late"]
-        val = ("Done" if p_ == "done" else "—" if p_ is None else f"{p_:%d %b %Y}")
-        delta = (None if late is None else "on the target date" if late == 0
-                 else f"+{late} working days late" if late > 0
-                 else f"{late} working days early")
-        col.metric(label, val, delta, delta_color="inverse" if late else "off", border=True,
-                   help="Balance ÷ dia-inch achieved per working day so far, counted "
-                        "on in working days from the as-of date (rest days and "
-                        "holidays from Targets & plan). Same as Projected finish there.")
-
-    if sched and sched["scope_di"] > 0:
-        act_pct = sched["welding"]["done"] / sched["scope_di"] * 100
-        plan_pct = sched["planned_di"] / sched["scope_di"] * 100
-        r5[0].metric("Welding vs plan", f"{act_pct:.1f}%",
-                     f"{act_pct - plan_pct:+.1f}% vs plan {plan_pct:.1f}%", border=True,
-                     help="Welded share of the plan scope against the planned share for "
-                          "the as-of date (scope ÷ total working days × working days "
-                          "elapsed) - the Planned to date on Targets & plan.")
-    else:
-        r5[0].metric("Welding progress", f"{progress:.1f}%", "no plan set",
-                     delta_color="off", border=True,
-                     help="Welding done as a share of total shop dia-inch. Set a plan "
-                          "on Targets & plan to compare it against.")
-    _proj("fitup", "Projected fit-up finish", r5[1])
-    _proj("welding", "Projected welding finish", r5[2])
-    if sched:
-        r5[3].metric("Target completion", f"{sched['target']:%d %b %Y}",
-                     f"{sched['remain_wd']} working days left", delta_color="off",
-                     border=True)
-    else:
-        r5[3].metric("Target completion", "—", border=True,
-                     help="Set one on Targets & plan.")
-
     st.subheader("Output (dia-inch)")
     r3 = st.container(key="kf_output").columns(4)
     r3[0].metric(f"{day_lbl} fit-up", f(s["today_fitup"]), border=True)
@@ -1225,6 +1181,50 @@ def page_overview() -> None:
             )),
             use_container_width=True,
         )
+
+    # Schedule against the Targets & plan settings - same formulas as that
+    # page's Plan vs actual table, counted to the as-of date.
+    st.subheader("Schedule")
+    sched = _overview_schedule(asof)
+    r5 = st.container(key="kf_sched").columns(4)
+
+    def _proj(k: str, label: str, col) -> None:
+        d = sched[k] if sched else None
+        if d is None:
+            col.metric(label, "—", border=True, help="Needs a plan on Targets & plan.")
+            return
+        p_, late = d["proj"], d["late"]
+        val = ("Done" if p_ == "done" else "—" if p_ is None else f"{p_:%d %b %Y}")
+        delta = (None if late is None else "on the target date" if late == 0
+                 else f"+{late} working days late" if late > 0
+                 else f"{late} working days early")
+        col.metric(label, val, delta, delta_color="inverse" if late else "off", border=True,
+                   help="Balance ÷ dia-inch achieved per working day so far, counted "
+                        "on in working days from the as-of date (rest days and "
+                        "holidays from Targets & plan). Same as Projected finish there.")
+
+    if sched and sched["scope_di"] > 0:
+        act_pct = sched["welding"]["done"] / sched["scope_di"] * 100
+        plan_pct = sched["planned_di"] / sched["scope_di"] * 100
+        r5[0].metric("Welding vs plan", f"{act_pct:.1f}%",
+                     f"{act_pct - plan_pct:+.1f}% vs plan {plan_pct:.1f}%", border=True,
+                     help="Welded share of the plan scope against the planned share for "
+                          "the as-of date (scope ÷ total working days × working days "
+                          "elapsed) - the Planned to date on Targets & plan.")
+    else:
+        r5[0].metric("Welding progress", f"{progress:.1f}%", "no plan set",
+                     delta_color="off", border=True,
+                     help="Welding done as a share of total shop dia-inch. Set a plan "
+                          "on Targets & plan to compare it against.")
+    _proj("fitup", "Projected fit-up finish", r5[1])
+    _proj("welding", "Projected welding finish", r5[2])
+    if sched:
+        r5[3].metric("Target completion", f"{sched['target']:%d %b %Y}",
+                     f"{sched['remain_wd']} working days left", delta_color="off",
+                     border=True)
+    else:
+        r5[3].metric("Target completion", "—", border=True,
+                     help="Set one on Targets & plan.")
 
     def breakdown(dims: str | tuple[str, ...], labels: str | tuple[str, ...],
                   *, spool_counts: bool = True,
