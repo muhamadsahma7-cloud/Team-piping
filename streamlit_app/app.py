@@ -24,6 +24,14 @@ from zoneinfo import ZoneInfo
 
 MYT = ZoneInfo("Asia/Kuala_Lumpur")
 
+
+def _today() -> date:
+    """Today in Malaysia. date.today() is the SERVER's date, and Streamlit
+    Cloud runs on UTC - so from midnight to 08:00 MYT it was still
+    yesterday: "Today's" figures showed the wrong day and every date picker
+    (Update progress, IRN, QC, Delivery...) defaulted to yesterday."""
+    return datetime.now(MYT).date()
+
 import altair as alt
 import pandas as pd
 import streamlit as st
@@ -289,6 +297,7 @@ _KF_STAGES = {
     "kf_spools": ("scope", "done", "irn", "irn"),
     "kf_ready":  ("paint", "done", "paint", "done"),
     "kf_deliv":  ("paint", "done", "done"),
+    "kf_wosum":  ("scope", "hold", "fitup", "weld"),
 }
 _STATIC_CSS += "".join(
     f'.st-key-{key} [data-testid="stColumn"]:nth-child({i}) [data-testid="stMetric"]'
@@ -578,6 +587,32 @@ if not st.session_state.get("user"):
         st.session_state["pending_path"] = _req
 logout_splash()
 kiosk_auth()          # QR with &k=<token> signs in silently, before the gate
+
+
+# Every page, in sidebar order. Their URLs are registered with Streamlit even
+# while signed out (below); the real, permission-filtered navigation is built
+# at the bottom of the file once the user is in.
+_PAGE_NAMES = [
+    "Overview", "Targets & plan", "Work order summary", "Weekly report",
+    "Monthly report", "Update progress", "QC update", "Scan & update",
+    "Field workers", "QR labels", "Delivery", "Spools", "Classify & export",
+    "QC WCS", "Inventory", "Manpower", "Activity", "Data admin", "Users",
+]
+
+
+def _page_slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+if not st.session_state.get("user"):
+    # Without this, a page link (/work-order-summary) opened on a freshly
+    # started app - every Cloud wake-from-sleep - hits Streamlit's "Page not
+    # found" and is bounced to the main page: the login gate stops the run
+    # before st.navigation has ever told Streamlit the page exists. Nothing
+    # here runs; it only makes the URLs known, so the link survives sign-in.
+    st.navigation([st.Page(lambda: None, title=n, url_path=_page_slug(n),
+                           default=(i == 0))
+                   for i, n in enumerate(_PAGE_NAMES)], position="hidden")
 login_gate()
 welcome_splash()
 
@@ -931,17 +966,17 @@ def page_overview() -> None:
         ttl=300,
     ).iloc[0]
     lo = pd.to_datetime(rng["lo"]).date() if rng["lo"] else date(2025, 1, 1)
-    hi = max(pd.to_datetime(rng["hi"]).date() if rng["hi"] else date.today(), date.today())
+    hi = max(pd.to_datetime(rng["hi"]).date() if rng["hi"] else _today(), _today())
 
     c = st.columns([1, 3])
     asof = c[0].date_input("As of date", value=hi, min_value=lo, max_value=hi,
                            format="YYYY-MM-DD")
-    if asof < date.today():
+    if asof < _today():
         c[1].info(f"Showing the project as it stood on **{asof.isoformat()}** "
                   f"(recorded activity {lo.isoformat()} → {min(asof, hi).isoformat()}).")
 
     s = db.query(_STATS_SQL, {"asof": asof.isoformat()}, ttl=30).iloc[0]
-    is_today = asof == date.today()
+    is_today = asof == _today()
     f = lambda x: f"{float(x or 0):,.2f}"
 
     shop_di = float(s["shop_di"] or 0)
@@ -1428,9 +1463,9 @@ def page_targets() -> None:
         f"SELECT min(substr(fitup_date,1,10)) lo FROM spools WHERE fitup_date ~ '{_ISO}'",
         ttl=300,
     ).iloc[0]
-    d_start = pd.to_datetime(cfg.get("plan_start") or lo_row["lo"] or date.today()).date()
+    d_start = pd.to_datetime(cfg.get("plan_start") or lo_row["lo"] or _today()).date()
     d_target = (pd.to_datetime(cfg["target_date"]).date()
-                if cfg.get("target_date") else date.today() + timedelta(days=60))
+                if cfg.get("target_date") else _today() + timedelta(days=60))
     d_scope = cfg.get("scope", "issued")
     _rr = cfg.get("rest")   # '' = deliberately no rest days; missing = default Sunday
     d_rest = [int(x) for x in _rr.split(",") if x] if _rr is not None else [6]
@@ -1486,7 +1521,7 @@ def page_targets() -> None:
 
     rest_s = set(rest)
     hol_s, _ = _parse_dates(hol_text)
-    today = date.today()
+    today = _today()
     scope_where = ("AND lower(coalesce(status,''))='issued' "
                    "AND upper(trim(coalesce(workable,'')))='Y'") if scope == "issued" else ""
     scope_di = float(db.query(
@@ -1694,13 +1729,6 @@ _WO_TOTALS_SQL = f"""
 SELECT
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S')                                   AS total_db,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S' AND lower(coalesce(status,''))='issued')      AS issued,
-  -- straight pipe is release-ready without fit-up/welding dates, so it never
-  -- counts as outstanding balance - same rule as the per-WO table above, which
-  -- would otherwise disagree with these totals on the very same page
-  (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S' AND lower(coalesce(status,''))='issued'
-     AND coalesce(trim(fitup_date),'')='' AND NOT ({_IS_STRAIGHT_SQL}))                                   AS bal_fitup_issued,
-  (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S' AND lower(coalesce(status,''))='issued'
-     AND coalesce(trim(welding_date),'')='' AND NOT ({_IS_STRAIGHT_SQL}))                                 AS bal_weld_issued,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S' AND upper(trim(coalesce(workable,'')))='Y')   AS workable,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S' AND upper(trim(coalesce(workable,'')))='N')   AS non_workable,
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S' AND lower(coalesce(status,''))='unissued')    AS unissued,
@@ -1708,19 +1736,82 @@ SELECT
   (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S' AND lower(coalesce(status,''))='os')          AS os
 """
 
-_PROGRESS_SQL = """
+# Dates count only when they're real ISO dates on or before today, the same
+# test the Overview uses - so "cumulative" here equals Fit-up / Welding done
+# there. Inspection is counted among joints that are actually done, so it
+# reads "inspected X of Y" rather than a gap that is just the cumulative
+# total whenever no inspection has been recorded.
+_PROGRESS_SQL = f"""
+WITH j AS (
+    SELECT joint_size,
+           substr(fitup_date,1,10)   AS fu,
+           substr(welding_date,1,10) AS wd,
+           coalesce(fitup_date ~ '{_ISO}'   AND substr(fitup_date,1,10)   <= :today, false) AS fu_done,
+           coalesce(welding_date ~ '{_ISO}' AND substr(welding_date,1,10) <= :today, false) AS wd_done,
+           coalesce(fitup_inspection_date ~ '{_ISO}'
+             AND substr(fitup_inspection_date,1,10) <= :today, false)                       AS fu_insp,
+           coalesce(welding_inspection_date ~ '{_ISO}'
+             AND substr(welding_inspection_date,1,10) <= :today, false)                     AS wd_insp
+    FROM spools WHERE shop_field='S'
+)
 SELECT
-  (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S' AND fitup_date = :today)   AS today_fitup,
-  (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S' AND welding_date = :today) AS today_weld,
-  (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S' AND coalesce(trim(fitup_date),'')<>'')   AS cum_fitup,
-  (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S' AND coalesce(trim(welding_date),'')<>'') AS cum_weld,
-  (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S')                            AS total_di,
-  (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
-     AND coalesce(trim(fitup_inspection_date),'')<>'')                                            AS fitup_insp,
-  (SELECT coalesce(sum(joint_size),0) FROM spools WHERE shop_field='S'
-     AND coalesce(trim(welding_inspection_date),'')<>'')                                          AS weld_insp
+  coalesce(sum(joint_size) FILTER (WHERE fu = :today),0)          AS today_fitup,
+  coalesce(sum(joint_size) FILTER (WHERE wd = :today),0)          AS today_weld,
+  coalesce(sum(joint_size) FILTER (WHERE fu_done),0)              AS cum_fitup,
+  coalesce(sum(joint_size) FILTER (WHERE wd_done),0)              AS cum_weld,
+  coalesce(sum(joint_size) FILTER (WHERE fu_done AND fu_insp),0)  AS fitup_insp,
+  coalesce(sum(joint_size) FILTER (WHERE wd_done AND wd_insp),0)  AS weld_insp
+FROM j
 """
 
+# One row per issued, workable work order. Same scope and done-test as the
+# Overview's `wo` CTE (ISO date on/before today, straight pipe counts as done),
+# so the balances here equal the Overview's WO fit-up / welding balance -
+# this page used to compute them three different ways in three places.
+_WO_TABLE_SQL = f"""
+WITH j AS (
+    SELECT coalesce(nullif(trim(wo_no),''),'(blank)') AS wo,
+           trim(iso_dwg_no) AS i, trim(line_no) AS l, trim(iso_run_no) AS r,
+           trim(dwg_spool_no) AS sp,
+           batch_no, area, material_group, joint_size,
+           {_IS_STRAIGHT_SQL}                                                        AS straight,
+           coalesce(fitup_date ~ '{_ISO}'   AND substr(fitup_date,1,10)   <= :today, false) AS fu,
+           coalesce(welding_date ~ '{_ISO}' AND substr(welding_date,1,10) <= :today, false) AS wd,
+           coalesce(site_delivery_date ~ '{_ISO}'
+             AND substr(site_delivery_date,1,10) <= :today, false)                  AS dl,
+           greatest(CASE WHEN fitup_date ~ '{_ISO}' AND substr(fitup_date,1,10) <= :today
+                         THEN substr(fitup_date,1,10) END,
+                    CASE WHEN welding_date ~ '{_ISO}' AND substr(welding_date,1,10) <= :today
+                         THEN substr(welding_date,1,10) END)                        AS act
+    FROM spools
+    WHERE shop_field='S' AND lower(coalesce(status,''))='issued'
+      AND upper(trim(coalesce(workable,'')))='Y'
+),
+s AS (   -- spool level: welded = every shop joint welded (straight pipe needs none)
+    SELECT wo, bool_and(wd OR straight) AS welded, bool_or(dl) AS delivered
+    FROM j GROUP BY wo, i, l, r, sp
+),
+w AS (
+    SELECT wo, count(*) AS spools,
+           count(*) FILTER (WHERE welded)    AS spools_welded,
+           count(*) FILTER (WHERE delivered) AS spools_delivered
+    FROM s GROUP BY wo
+)
+SELECT j.wo                                                         AS "WO No",
+       string_agg(DISTINCT nullif(trim(batch_no),''), ', ')         AS "Batch",
+       string_agg(DISTINCT nullif(trim(area),''), ', ')             AS "Area",
+       string_agg(DISTINCT nullif(trim(material_group),''), ', ')   AS "Material Group",
+       w.spools                                                     AS "Spools",
+       w.spools_welded                                              AS "Spools welded",
+       w.spools_delivered                                           AS "Delivered to site",
+       round(coalesce(sum(joint_size),0),2)                         AS "Total Dia Inch",
+       round(coalesce(sum(joint_size) FILTER (WHERE NOT (fu OR straight)),0),2) AS "Balance Fit-Up",
+       round(coalesce(sum(joint_size) FILTER (WHERE NOT (wd OR straight)),0),2) AS "Balance Welding",
+       max(act)                                                     AS "Last activity"
+FROM j JOIN w USING (wo)
+GROUP BY j.wo, w.spools, w.spools_welded, w.spools_delivered
+ORDER BY "Balance Welding" DESC, "Balance Fit-Up" DESC, j.wo
+"""
 
 def _period_figures(s_: str, e_: str) -> pd.Series:
     """Key figures for one date range (inclusive). Shared by Weekly report
@@ -1865,7 +1956,7 @@ def page_weekly() -> None:
     _ensure_daily_concerns(db._conn_name())
 
     cfg = db.get_settings()
-    today = date.today()
+    today = _today()
     this_mon = today - timedelta(days=today.weekday())
 
     c = st.columns([1, 1.4, 2])
@@ -2092,7 +2183,7 @@ def page_monthly() -> None:
     _ensure_daily_concerns(db._conn_name())
 
     cfg = db.get_settings()
-    today = date.today()
+    today = _today()
     this_mo = today.replace(day=1)
 
     def _month_end(mo_start: date) -> date:
@@ -2326,73 +2417,97 @@ def page_monthly() -> None:
 def page_wo_summary() -> None:
     st.header("Work order summary")
     _ensure_spool_type(db._conn_name())
+    today = _today()
+    STALL_DAYS = 7          # open WO with no fit-up / welding for this long
 
-    wo = db.query(
-        f"""
-        SELECT coalesce(nullif(trim(wo_no),''),'(blank)') AS "WO No",
-               coalesce(material_group,'')                AS "Material Group",
-               round(coalesce(sum(joint_size),0),2)       AS "Total Dia Inch",
-               round(coalesce(sum(joint_size) FILTER (
-                   WHERE coalesce(trim(fitup_date),'')='' AND NOT ({_IS_STRAIGHT_SQL})
-               ),0),2)                                    AS "Balance Fit-Up",
-               round(coalesce(sum(joint_size) FILTER (
-                   WHERE coalesce(trim(welding_date),'')='' AND NOT ({_IS_STRAIGHT_SQL})
-               ),0),2)                                    AS "Balance Welding"
-        FROM spools
-        WHERE shop_field='S' AND lower(coalesce(status,''))='issued'
-        GROUP BY 1, 2
-        ORDER BY "Balance Welding" DESC, "Balance Fit-Up" DESC
-        """,
-        ttl=30,
-    )
+    wo = db.query(_WO_TABLE_SQL, {"today": today.isoformat()}, ttl=30)
     for cc in ("Total Dia Inch", "Balance Fit-Up", "Balance Welding"):
         wo[cc] = wo[cc].astype(float)
+    for cc in ("Spools", "Spools welded", "Delivered to site"):
+        wo[cc] = wo[cc].fillna(0).astype(int)
     tot = wo["Total Dia Inch"].where(wo["Total Dia Inch"] > 0)
-    wo["Fit-up %"] = ((1 - wo["Balance Fit-Up"] / tot) * 100).round(0).fillna(0)
-    wo["Welding %"] = ((1 - wo["Balance Welding"] / tot) * 100).round(0).fillna(0)
-    done_mask = (wo["Balance Fit-Up"] == 0) & (wo["Balance Welding"] == 0)
-    wo_show = wo.assign(Status=["✅ closed" if x else "🔧 open" for x in done_mask])
+    for pc, bc in (("Fit-up %", "Balance Fit-Up"), ("Welding %", "Balance Welding")):
+        wo[pc] = ((1 - wo[bc] / tot) * 100).round(0).fillna(0)
+        # never read 100% while a balance remains (rounding can swallow it)
+        wo.loc[wo[bc] > 0.005, pc] = wo.loc[wo[bc] > 0.005, pc].clip(upper=99)
+    closed = (wo["Balance Fit-Up"] <= 0.005) & (wo["Balance Welding"] <= 0.005)
+    last = pd.to_datetime(wo["Last activity"], errors="coerce")
+    # days since the WO last saw fit-up or welding - open WOs only; a closed
+    # WO isn't "idle", it's finished
+    wo["Days idle"] = [None if c or pd.isna(d) else (today - d.date()).days
+                       for c, d in zip(closed, last)]
+    wo["Last activity"] = last.dt.strftime("%Y-%m-%d").fillna("")
+    stalled = (~closed) & (pd.to_numeric(wo["Days idle"], errors="coerce") >= STALL_DAYS)
+    wo.insert(0, "Status", ["✅ closed" if c else "🔧 open" for c in closed])
+    wo = wo[["Status", "WO No", "Batch", "Area", "Material Group",
+             "Spools", "Spools welded", "Delivered to site",
+             "Total Dia Inch", "Balance Fit-Up", "Fit-up %",
+             "Balance Welding", "Welding %", "Last activity", "Days idle"]]
 
-    st.subheader("Work order issuance — issued WOs")
-    a, b, c, e = st.columns(4)
-    a.metric("Work orders", f"{len(wo):,}", border=True)
-    b.metric("Closed", f"{int(done_mask.sum()):,}", border=True)
-    c.metric("Balance fit-up", f"{wo['Balance Fit-Up'].sum():,.2f}", border=True)
-    e.metric("Balance welding", f"{wo['Balance Welding'].sum():,.2f}", border=True)
+    st.subheader("Work order issuance — issued, workable WOs")
+    st.caption("Same scope and balances as the Overview's *WO fit-up / welding "
+               "balance*. A date counts once it's a real date on or before today; "
+               "straight pipe needs no fit-up or welding.")
+    k = st.container(key="kf_wosum").columns(4)
+    k[0].metric("Work orders", f"{len(wo):,}",
+                f"{int(closed.sum())} closed · {int((~closed).sum())} open",
+                delta_color="off", border=True)
+    k[1].metric(f"Stalled ≥ {STALL_DAYS} days", f"{int(stalled.sum()):,}", border=True,
+                help=f"Open work orders with no fit-up or welding in the last "
+                     f"{STALL_DAYS} days. A WO with no activity at all yet isn't "
+                     "counted - there's no start to measure idle time from.")
+    k[2].metric("Balance fit-up", f"{wo['Balance Fit-Up'].sum():,.2f}", border=True)
+    k[3].metric("Balance welding", f"{wo['Balance Welding'].sum():,.2f}", border=True)
 
-    only_open = st.toggle("Hide closed work orders", value=False)
-    view = wo_show[~done_mask] if only_open else wo_show
-    styler = view.style.apply(
-        lambda r: (["background-color:rgba(34,197,94,.14)"] if r["Status"] == "✅ closed"
-                   else [""]) * len(r),
-        axis=1,
-    )
-    show_table(view, "work_order_issuance", styler=styler,
+    f1, f2 = st.columns([3, 1], vertical_alignment="bottom")
+    q = f1.text_input("Search", placeholder="WO no, batch, area or material",
+                      label_visibility="collapsed").strip().lower()
+    only_open = f2.toggle("Hide closed work orders", value=False)
+    view = wo[~closed] if only_open else wo
+    if q:
+        hay = view[["WO No", "Batch", "Area", "Material Group"]].fillna("").astype(str) \
+            .agg(" ".join, axis=1).str.lower()
+        view = view[hay.str.contains(q, regex=False)]
+    idle_col = list(view.columns).index("Days idle")
+
+    def _row_style(r):
+        out = (["background-color:rgba(34,197,94,.14)"] if r["Status"] == "✅ closed"
+               else [""]) * len(r)
+        d = pd.to_numeric(r["Days idle"], errors="coerce")
+        if r["Status"] != "✅ closed" and pd.notna(d) and d >= STALL_DAYS:
+            out[idle_col] = "color:#f43f5e;font-weight:700"
+        return out
+
+    show_table(view, "work_order_issuance", styler=view.style.apply(_row_style, axis=1),
                progress=("Fit-up %", "Welding %"),
                money=("Total Dia Inch", "Balance Fit-Up", "Balance Welding"))
 
     # ---- progress summary ----
-    p = db.query(_PROGRESS_SQL, {"today": date.today().isoformat()}, ttl=30).iloc[0]
-    total_di = float(p["total_di"])
-    sc = reports.summary_status_counts(_all_spools())
-    prog = pd.DataFrame([
-        ("Today's date", date.today().strftime("%d-%m-%Y (%A)")),
-        ("Today's fit-up (dia-inch)", f"{float(p['today_fitup']):,.2f}"),
-        ("Today's welding (dia-inch)", f"{float(p['today_weld']):,.2f}"),
-        ("Cumulative fit-up (dia-inch)", f"{float(p['cum_fitup']):,.2f}"),
-        ("Cumulative welding (dia-inch)", f"{float(p['cum_weld']):,.2f}"),
-        ("Balance fit-up (dia-inch)", f"{total_di - float(p['cum_fitup']):,.2f}"),
-        ("Balance welding (dia-inch)", f"{total_di - float(p['cum_weld']):,.2f}"),
-        ("Gap fit-up vs inspection (dia-inch)", f"{float(p['cum_fitup']) - float(p['fitup_insp']):,.2f}"),
-        ("Gap welding vs inspection (dia-inch)", f"{float(p['cum_weld']) - float(p['weld_insp']):,.2f}"),
-        ("Spool: not started", sc["Not Started"]),
-        ("Spool: under fabrication", sc["Under Fabrication"]),
-        ("Spool: ready to release", sc["Ready to Release"]),
-        ("Spool: sent to painting", sc["Sent to Painting"]),
-        ("Spool: sent to site", sc["Sent to Site"]),
-    ], columns=["Description", "Value"])
-    prog["Value"] = prog["Value"].astype(str)
+    p = db.query(_PROGRESS_SQL, {"today": today.isoformat()}, ttl=30).iloc[0]
+    cum_fu, cum_wd = float(p["cum_fitup"]), float(p["cum_weld"])
+    insp = lambda n, of: (f"{n:,.2f} of {of:,.2f} ({n / of * 100:.0f}%)" if of
+                          else f"{n:,.2f}")
+    # spool statuses from the same classification as Classify & export. The
+    # old 5-bucket tally lumped fully-welded "awaiting IRN" and "ready to
+    # release" spools into Under fabrication (469 there vs 98 here).
+    ss = reports.summarize(reports.classify(_all_spools()))
+    by_status = dict(zip(ss["Spool Status"], ss["Pipe Spools"]))
+    prog = pd.DataFrame(
+        [("Today's date", today.strftime("%d-%m-%Y (%A)")),
+         ("Today's fit-up (dia-inch)", f"{float(p['today_fitup']):,.2f}"),
+         ("Today's welding (dia-inch)", f"{float(p['today_weld']):,.2f}"),
+         ("Cumulative fit-up (dia-inch)", f"{cum_fu:,.2f}"),
+         ("Cumulative welding (dia-inch)", f"{cum_wd:,.2f}"),
+         ("Fit-up inspected (dia-inch)", insp(float(p["fitup_insp"]), cum_fu)),
+         ("Welding inspected (dia-inch)", insp(float(p["weld_insp"]), cum_wd))]
+        + [(f"Spool: {s_.lower()}", f"{int(by_status.get(s_, 0)):,}")
+           for s_ in reports._STATUS_ORDER],
+        columns=["Description", "Value"])
     st.subheader("Progress summary")
+    if float(p["fitup_insp"]) == 0 and float(p["weld_insp"]) == 0 and (cum_fu or cum_wd):
+        st.caption("No fit-up or welding inspection dates recorded yet. QC enters "
+                   "them on **QC update**, which needs the *QC Update* permission "
+                   "(Users page).")
     st.dataframe(prog, use_container_width=True, hide_index=True)
 
     # ---- work order totals ----
@@ -2400,8 +2515,6 @@ def page_wo_summary() -> None:
     totals = pd.DataFrame([
         ("Total dia-inch in database", t["total_db"]),
         ("Total dia-inch issued work order", t["issued"]),
-        ("Balance dia-inch fit-up (issued W.O.)", t["bal_fitup_issued"]),
-        ("Balance dia-inch welding (issued W.O.)", t["bal_weld_issued"]),
         ("Total workable dia-inch", t["workable"]),
         ("Non-workable dia-inch", t["non_workable"]),
         ("Total dia-inch unissued work order", t["unissued"]),
@@ -2417,13 +2530,12 @@ def page_wo_summary() -> None:
         "⬇ Export to Excel",
         data=reports.build_full_backup_xlsx({
             "Progress Summary": prog,
-            "Work Order Issuance": wo_show,
+            "Work Order Issuance": wo,
             "Work Order Summary": totals,
         }),
         file_name=f"work_order_summary_{reports.stamp()}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-
 
 def _clear_dates_ui(col: str, joints: pd.DataFrame, *, iso: str, line: str,
                     jlabel) -> None:
@@ -2701,7 +2813,7 @@ def page_update() -> None:
         if not already.empty:
             st.caption(f"Already IRN'd: {_spools_of(already)}")
         _clear_dates_ui("irn", joints, iso=iso, line=line, jlabel=jlabel)
-        irn_date_in = st.date_input("IRN Date", value=date.today(), format="DD/MM/YYYY")
+        irn_date_in = st.date_input("IRN Date", value=_today(), format="DD/MM/YYYY")
         irn_report = st.text_input("IRN Report No")
         if not ready:
             st.info("None of the spools picked are ready for an IRN.")
@@ -2752,7 +2864,7 @@ def page_update() -> None:
             for r in elig.itertuples()}
     picked = st.multiselect(f"Joint(s) to update — {len(opts)} ready",
                             list(opts), default=list(opts))
-    d = st.date_input("Date", value=date.today(), format="DD/MM/YYYY")
+    d = st.date_input("Date", value=_today(), format="DD/MM/YYYY")
     if st.button(f"Save {mode.lower()} for {len(picked)} joint(s)", type="primary"):
         if not picked:
             st.warning("Select at least one joint.")
@@ -2828,7 +2940,7 @@ def page_qc_update() -> None:
     grid = joints[ident + ctx + cols].copy()
 
     fill = st.columns([1, 1, 3])
-    fill_date = fill[0].date_input(f"Set {fields[0][1]}", value=date.today(),
+    fill_date = fill[0].date_input(f"Set {fields[0][1]}", value=_today(),
                                    format="DD/MM/YYYY", key="qc_fill_date")
     if fill[1].button("Fill the column", key="qc_fill_btn",
                       help="Writes that date into every row below. Nothing is "
@@ -3311,7 +3423,7 @@ def page_scan() -> None:
 
     picked = st.multiselect(f"Joints to mark {activity} complete", elig, default=elig)
     pin = st.text_input("Your PIN", type="password", max_chars=6)
-    wd = st.date_input("Date completed", value=date.today(), format="DD/MM/YYYY")
+    wd = st.date_input("Date completed", value=_today(), format="DD/MM/YYYY")
 
     if st.button(f"✅ Confirm {activity} for {len(picked)} joint(s)", type="primary",
                  use_container_width=True, disabled=not picked):
@@ -3764,7 +3876,7 @@ def _delivery_worklist(kind: str) -> None:
 
         c = st.columns(2)
         do_no = c[0].text_input(do_label, key=f"{kind}_do")
-        d = c[1].date_input("Delivery date", value=date.today(), format="YYYY-MM-DD")
+        d = c[1].date_input("Delivery date", value=_today(), format="YYYY-MM-DD")
         confirm = st.checkbox(f"Confirm — record {verb} for the ticked spools",
                               key=f"{kind}_confirm")
         if st.button(f"Record {verb}", type="primary", disabled=not confirm):
@@ -4581,7 +4693,7 @@ def page_activity() -> None:
         cutoff = None
         if mode == "Older than a date":
             cutoff = st.date_input("Delete entries before", key="act_reset_cutoff",
-                                   value=date.today() - timedelta(days=90),
+                                   value=_today() - timedelta(days=90),
                                    format="YYYY-MM-DD")
             n_to_del = int(db.query(
                 "SELECT count(*) n FROM user_log WHERE login_time < :c",
@@ -4816,7 +4928,7 @@ def page_manpower() -> None:
         st.subheader("Add / update a day")
         with st.form("mp"):
             c = st.columns(3)
-            d = c[0].date_input("Date", value=date.today(), format="YYYY-MM-DD")
+            d = c[0].date_input("Date", value=_today(), format="YYYY-MM-DD")
             w = c[1].number_input("Total welders", min_value=0, step=1, value=0)
             fi = c[2].number_input("Total fitters", min_value=0, step=1, value=0)
             saved = st.form_submit_button("Save", type="primary")
@@ -4865,7 +4977,7 @@ def page_manpower() -> None:
     if can_edit:
         with st.form("concern", clear_on_submit=True):
             cc = st.columns([1, 1, 3])
-            cdate = cc[0].date_input("Date", value=date.today(), format="YYYY-MM-DD",
+            cdate = cc[0].date_input("Date", value=_today(), format="YYYY-MM-DD",
                                      key="concern_date")
             ccat = cc[1].selectbox("Category", _CONCERN_CATEGORIES, key="concern_cat")
             cnote = cc[2].text_area("Concern", key="concern_note", height=68)
@@ -4969,7 +5081,8 @@ _NAV_ICONS = {
     "Data admin": ":material/database:",
     "Users": ":material/manage_accounts:",
 }
-assert set(_PAGE_FUNCS) == set(PAGE_PERMS) == {n for g in _NAV_GROUPS.values() for n in g}
+assert (set(_PAGE_FUNCS) == set(PAGE_PERMS) == set(_PAGE_NAMES)
+        == {n for g in _NAV_GROUPS.values() for n in g})
 
 _perm = st.session_state.get("permission", "")
 _visible = [p for p in PAGE_PERMS if can_see(p, _perm)] or ["Overview"]
@@ -4977,7 +5090,7 @@ _visible = [p for p in PAGE_PERMS if can_see(p, _perm)] or ["Overview"]
 # it - Streamlit falls back to the default page instead
 _pages = {
     n: st.Page(_PAGE_FUNCS[n], title=n, icon=_NAV_ICONS[n],
-               url_path=re.sub(r"[^a-z0-9]+", "-", n.lower()).strip("-"),
+               url_path=_page_slug(n),
                default=(n == _visible[0]))
     for n in _visible
 }

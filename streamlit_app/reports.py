@@ -741,41 +741,6 @@ def build_bom_template_xlsx() -> bytes:
     )
 
 
-def summary_status_counts(df: pd.DataFrame) -> dict[str, int]:
-    """Spool-status tally, mirroring tabs/project_summary_tab.py (5 buckets)."""
-    d = df[df["shop_field"] == "S"].copy()
-    for c in ("line_no", "iso_dwg_no", "dwg_spool_no", "iso_run_no"):
-        d[c] = d[c].fillna("").astype(str).str.strip()
-    d["k"] = d["line_no"] + "_" + d["iso_dwg_no"] + "_" + d["dwg_spool_no"] + "_" + d["iso_run_no"]
-
-    counter = {"Not Started": 0, "Under Fabrication": 0, "Ready to Release": 0,
-               "Sent to Painting": 0, "Sent to Site": 0}
-    ss = {"SS", "SS304", "SS316"}
-
-    def filled(s):
-        return s.fillna("").astype(str).str.strip().ne("")
-
-    for _, g in d.groupby("k"):
-        mat = str(g["material_group"].fillna("").iloc[0]).upper()
-        all_f = lambda c: bool(filled(g[c]).all())
-        any_f = lambda c: bool(filled(g[c]).any())
-
-        if _is_straight_pipe(g):
-            s = "Ready to Release"
-        elif any_f("site_delivery_date"):
-            s = "Sent to Site"
-        elif any_f("delivery_date"):
-            s = "Sent to Site" if mat in ss else "Sent to Painting"
-        elif all_f("fitup_inspection_date") and all_f("welding_inspection_date") and all_f("irn_date"):
-            s = "Ready to Release"
-        elif not any_f("fitup_date"):
-            s = "Not Started"
-        else:
-            s = "Under Fabrication"
-        counter[s] += 1
-    return counter
-
-
 def build_full_backup_xlsx(tables: dict[str, pd.DataFrame]) -> bytes:
     """One workbook, one sheet per table - a portable snapshot."""
     buf = io.BytesIO()
