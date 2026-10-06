@@ -2783,10 +2783,40 @@ def page_update() -> None:
         return
     iso, line, pages, pairs, joints, sp_lbl, jlabel, multi_spool = picked
 
-    _show = ["iso_run_no", "dwg_spool_no"] if multi_spool else []
+    _show = ["Update"] + (["iso_run_no", "dwg_spool_no"] if multi_spool else [])
     _show += ["joint_no", "joint_size", "item_1", "sch_rating_1", "item_2",
               "sch_rating_2", "fitup_date", "welding_date", "irn_date", "irn_report_no"]
-    st.dataframe(joints[_show], use_container_width=True, hide_index=True)
+    # tint for the rows that will be written - the mode's stage colour, so the
+    # joints about to change stand out from the whole selection
+    _tint = {"Fit-Up date": "rgba(245,158,11,.24)", "Welding date": "rgba(47,111,235,.22)",
+             "IRN": "rgba(139,92,246,.22)"}[mode]
+
+    def _joint_table(status: list[str]) -> None:
+        """The selection's joints, with an Update column and the rows that
+        the save will write highlighted; done joints greyed, blocked ones red."""
+        t = joints.assign(Update=status)[_show]
+        # joints to update first, then not picked, blocked, done - so on a
+        # drawing that's nearly finished the one joint left isn't buried
+        # under a screenful of greyed-out "done" rows. Stable: joint order
+        # is kept within each group.
+        _rank = lambda u: (0 if u.startswith("▶") else 3 if u.startswith("✓")
+                           else 2 if u.startswith("✗") else 1)
+        t = t.iloc[sorted(range(len(t)), key=lambda i: _rank(t["Update"].iat[i]))]
+
+        def _style(r):
+            u = r["Update"]
+            if u.startswith("▶"):
+                return [f"background-color:{_tint};font-weight:600"] * len(r)
+            if u.startswith("✓"):
+                return ["color:#94a3b8"] * len(r)
+            if u.startswith("✗"):
+                return ["color:#f43f5e"] * len(r)
+            return [""] * len(r)
+        n = sum(1 for x in status if x.startswith("▶"))
+        st.caption(f"**{n}** joint(s) highlighted will be updated · ✓ already done "
+                   "(greyed) · ✗ can't be updated yet.")
+        st.dataframe(t.style.apply(_style, axis=1), use_container_width=True,
+                     hide_index=True)
 
     # Writes stay inside the same shop-only scope as `base`, which every picker
     # and the joints preview use - otherwise a save would also stamp field-side
@@ -2806,6 +2836,12 @@ def page_update() -> None:
         for (p_, s_), g in joints.groupby(["iso_run_no", "dwg_spool_no"], sort=False):
             done = bool((g.fitup_date != "").all() and (g.welding_date != "").all())
             (ready if (done or reports._is_straight_pipe(g)) else blocked).append((p_, s_))
+        _ready = set(ready)
+        _joint_table([
+            ("▶ IRN — overwrites existing" if (p_, s_) in _ready and irn_d
+             else "▶ IRN" if (p_, s_) in _ready
+             else "✗ Needs fit-up + welding")
+            for p_, s_, irn_d in zip(joints.iso_run_no, joints.dwg_spool_no, joints.irn_date)])
         if blocked:
             st.warning("Not fit-up + welded yet, so these can't be IRN'd: "
                        + ", ".join(sp_lbl(p, s) for p, s in blocked))
@@ -2852,6 +2888,32 @@ def page_update() -> None:
             st.caption("Fit-Up required first: "
                        + ", ".join(jlabel(r) for r in no_fitup.itertuples()))
 
+    opts = {jlabel(r): (r.iso_run_no, r.dwg_spool_no, r.joint_no)
+            for r in elig.itertuples()}
+    # The joint picker sits below the table, but the table needs to know
+    # what it holds to highlight it - so the picker is keyed to this exact
+    # selection and its current value read first. Labels that stopped being
+    # eligible (just saved, say) are dropped before the widget is built.
+    scope = re.sub(r"\W+", "_", iso + line + "".join(
+        sorted({f"{p}{s}" for p, s in zip(joints.iso_run_no, joints.dwg_spool_no)})))[-40:]
+    pick_key = f"upd_pick_{col}_{scope}"
+    if pick_key in st.session_state:
+        st.session_state[pick_key] = [x for x in st.session_state[pick_key] if x in opts]
+    chosen = {opts[x] for x in st.session_state.get(pick_key, list(opts))}
+    elig_keys = set(opts.values())
+    status = []
+    for r in joints.itertuples():
+        k = (r.iso_run_no, r.dwg_spool_no, r.joint_no)
+        if k in chosen:
+            status.append("▶ Update")
+        elif k in elig_keys:
+            status.append("Ready (not picked)")
+        elif getattr(r, col):
+            status.append("✓ Done")
+        else:
+            status.append("✗ Needs fit-up")
+    _joint_table(status)
+
     if not locked.empty:
         st.caption(f"Already set (locked), {len(locked)} joint(s): "
                    + ", ".join(jlabel(r) for r in locked.itertuples()))
@@ -2860,10 +2922,9 @@ def page_update() -> None:
         st.info("No joints available to update here.")
         return
 
-    opts = {jlabel(r): (r.iso_run_no, r.dwg_spool_no, r.joint_no)
-            for r in elig.itertuples()}
     picked = st.multiselect(f"Joint(s) to update — {len(opts)} ready",
-                            list(opts), default=list(opts))
+                            list(opts), key=pick_key,
+                            default=None if pick_key in st.session_state else list(opts))
     d = st.date_input("Date", value=_today(), format="DD/MM/YYYY")
     if st.button(f"Save {mode.lower()} for {len(picked)} joint(s)", type="primary"):
         if not picked:
