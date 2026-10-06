@@ -605,7 +605,7 @@ kiosk_auth()          # QR with &k=<token> signs in silently, before the gate
 # while signed out (below); the real, permission-filtered navigation is built
 # at the bottom of the file once the user is in.
 _PAGE_NAMES = [
-    "Overview", "Targets & plan", "Work order summary", "Weekly report",
+    "Overview", "Targets & plan", "Work order summary", "Daily report", "Weekly report",
     "Monthly report", "Update progress", "QC update", "Scan & update",
     "Field workers", "QR labels", "Delivery", "Classified report & master database",
     "QC WCS", "Inventory", "Manpower", "Activity", "Data admin", "Users",
@@ -645,6 +645,7 @@ PAGE_PERMS = {
     "Overview": [],
     "Targets & plan": ["Targets"],
     "Work order summary": [],
+    "Daily report": [],
     "Weekly report": [],
     "Monthly report": [],
     "Update progress": ["Update Fit-Up", "Update Welding", "Update IRN"],
@@ -1960,6 +1961,250 @@ def _daily_breakdown_chart(s_: str, e_: str, *, rotate: bool = False) -> pd.Data
     ).properties(height=260, title="Daily fit-up vs welding")
     st.altair_chart(dark_alt(chart), use_container_width=True)
     return daily
+
+
+def _plan_cfg() -> dict:
+    """Rest days, holidays and the per-day planned dia-inch from Targets &
+    plan (per_day is None when no plan is set). Same parsing the Weekly /
+    Monthly plan-vs-actual uses."""
+    cfg = db.get_settings()
+    _rr = cfg.get("rest")
+    rest_s = set(int(x) for x in _rr.split(",") if x) if _rr is not None else {6}
+    hol_s, _ = _parse_dates(cfg.get("holidays") or "")
+    out = {"rest": rest_s, "holidays": hol_s, "per_day": None}
+    if cfg.get("plan_start") and cfg.get("target_date"):
+        out["start"] = pd.to_datetime(cfg["plan_start"]).date()
+        out["target"] = pd.to_datetime(cfg["target_date"]).date()
+        scope_where = ("AND lower(coalesce(status,''))='issued' "
+                       "AND upper(trim(coalesce(workable,'')))='Y'"
+                       if cfg.get("scope", "issued") == "issued" else "")
+        scope_di = float(db.query(
+            f"SELECT coalesce(sum(joint_size),0) v FROM spools WHERE shop_field='S' {scope_where}",
+            ttl=60).iloc[0]["v"])
+        total_wd = _wdays(out["start"], out["target"], rest_s, hol_s)
+        if total_wd > 0:
+            out["per_day"] = scope_di / total_wd
+    return out
+
+
+def page_daily() -> None:
+    st.header("📆 Daily report")
+    _ensure_daily_concerns(db._conn_name())
+    _ensure_qr_schema(db._conn_name())       # fitup_by / welding_by / welder_no
+
+    today = _today()
+    plan = _plan_cfg()
+    c = st.columns([1, 1.4, 2])
+    quick = c[0].selectbox("Day", ["Today", "Yesterday", "Custom"],
+                           label_visibility="collapsed")
+    if quick == "Today":
+        day = today
+    elif quick == "Yesterday":
+        day = today - timedelta(days=1)
+    else:
+        day = c[1].date_input("Day", value=today, max_value=today,
+                              format="DD/MM/YYYY", label_visibility="collapsed")
+    s = day.isoformat()
+    label = f"{day:%A, %d %b %Y}"
+    c[2].markdown(f"### {label}")
+    working = _is_working(day, plan["rest"], plan["holidays"])
+    if not working:
+        st.caption("A rest day / holiday under Targets & plan — any work shown is overtime.")
+    if day == today:
+        st.caption("Today isn't over yet — figures are as of now.")
+
+    # compare with the previous WORKING day: against plain "yesterday", every
+    # Monday would be measured against an empty Sunday
+    prev = day - timedelta(days=1)
+    for _ in range(14):
+        if _is_working(prev, plan["rest"], plan["holidays"]):
+            break
+        prev -= timedelta(days=1)
+    kf = _period_figures(s, s)
+    pf = _period_figures(prev.isoformat(), prev.isoformat())
+    _d = lambda now, before, dp=2: _period_delta(now, before, dp, vs=f"{prev:%a %d %b}")
+
+    st.subheader("Key figures")
+    st.caption(f"Arrows compare with the previous working day ({prev:%A %d %b}).")
+    a = st.columns(4)
+    a[0].metric("Fit-up (dia-inch)", f"{kf['fitup_di']:,.2f}",
+                _d(kf["fitup_di"], pf["fitup_di"]), border=True)
+    a[1].metric("Welding (dia-inch)", f"{kf['welding_di']:,.2f}",
+                _d(kf["welding_di"], pf["welding_di"]), border=True)
+    a[2].metric("Spools completed", f"{int(kf['spools_done']):,}",
+                _d(kf["spools_done"], pf["spools_done"], 0), border=True)
+    a[3].metric("IRN'd (joints)", f"{int(kf['irn_joints']):,}",
+                _d(kf["irn_joints"], pf["irn_joints"], 0), border=True)
+    b = st.columns(4)
+    b[0].metric("Delivered to painting (dia-inch)", f"{kf['paint_di']:,.2f}",
+                _d(kf["paint_di"], pf["paint_di"]), border=True)
+    b[1].metric("Delivered to site (dia-inch)", f"{kf['site_di']:,.2f}",
+                _d(kf["site_di"], pf["site_di"]), border=True)
+    b[2].metric("Fitters", f"{int(kf['fitter_days']):,}",
+                _d(kf["fitter_days"], pf["fitter_days"], 0), border=True,
+                help="From the day's Manpower report.")
+    b[3].metric("Welders", f"{int(kf['welder_days']):,}",
+                _d(kf["welder_days"], pf["welder_days"], 0), border=True,
+                help="From the day's Manpower report.")
+
+    st.subheader("Productivity")
+    _rate = lambda di, n: (di / n) if n else None
+    f_now, f_prev = _rate(kf["fitup_di"], kf["fitter_days"]), _rate(pf["fitup_di"], pf["fitter_days"])
+    w_now, w_prev = _rate(kf["welding_di"], kf["welder_days"]), _rate(pf["welding_di"], pf["welder_days"])
+    p = st.columns(2)
+    p[0].metric("Dia-inch per fitter", f"{f_now:.2f}" if f_now is not None else "—",
+                _d(f_now, f_prev) if (f_now is not None and f_prev is not None) else None,
+                border=True)
+    p[1].metric("Dia-inch per welder", f"{w_now:.2f}" if w_now is not None else "—",
+                _d(w_now, w_prev) if (w_now is not None and w_prev is not None) else None,
+                border=True)
+    if not kf["fitter_days"] and not kf["welder_days"]:
+        st.caption("No Manpower report for this day — log one on **Manpower** to get "
+                   "per-person rates.")
+
+    # ---- the day against the plan's daily target -------------------------
+    st.subheader("Plan vs actual")
+    plan_row = None
+    if plan["per_day"] and plan["start"] <= day <= plan["target"]:
+        tgt = plan["per_day"] if working else 0.0
+        plan_row = pd.DataFrame([
+            {"Metric": m, "Daily target (dia-inch)": round(tgt, 2),
+             "Actual (dia-inch)": round(actual, 2), "Delta": round(actual - tgt, 2),
+             "Status": ("BEHIND" if actual - tgt < -0.01 else "on / ahead of plan")}
+            for m, actual in (("Fit-up", kf["fitup_di"]), ("Welding", kf["welding_di"]))
+        ])
+        st.dataframe(
+            plan_row.style.map(
+                lambda v: "color:#f87171;font-weight:bold" if v == "BEHIND" else "color:#34d399",
+                subset=["Status"]),
+            use_container_width=True, hide_index=True, column_config=num2_cfg(plan_row))
+        st.caption("Daily target = plan scope ÷ working days in the plan — the same "
+                   "Target/day as Targets & plan.")
+    else:
+        st.info("No plan covers this day — set one on **Targets & plan**.")
+
+    # ---- project to date at the end of the day ----------------------------
+    ptd = _project_to_date(s)
+    tot_di = float(ptd["total_di"])
+    sched = _overview_schedule(day)
+    st.subheader("Project to date")
+    q_ = st.columns(4)
+    q_[0].metric("Cumulative fit-up", f"{ptd['fitup_di']:,.2f}",
+                 f"{ptd['fitup_di'] / tot_di * 100:.1f}% of project" if tot_di else None,
+                 delta_color="off", border=True)
+    q_[1].metric("Cumulative welding", f"{ptd['welding_di']:,.2f}",
+                 f"{ptd['welding_di'] / tot_di * 100:.1f}% of project" if tot_di else None,
+                 delta_color="off", border=True)
+    q_[2].metric("Balance welding", f"{tot_di - ptd['welding_di']:,.2f}",
+                 delta_color="off", border=True)
+    wproj = sched["welding"]["proj"] if sched else None
+    q_[3].metric("Projected welding finish",
+                 "Done" if wproj == "done" else f"{wproj:%d %b %Y}" if wproj else "—",
+                 (f"target {sched['target']:%d %b}" if sched else None),
+                 delta_color="off", border=True,
+                 help="Same projection as the Overview's Schedule row, as of this day.")
+
+    # ---- the joints behind the figures -------------------------------------
+    jdf = db.query(
+        """SELECT substr(fitup_date,1,10) = :d AS is_fu,
+                  substr(welding_date,1,10) = :d AS is_wd,
+                  coalesce(wo_no,'') AS wo, coalesce(iso_dwg_no,'') AS iso,
+                  coalesce(iso_run_no,'') AS page, coalesce(dwg_spool_no,'') AS spool,
+                  coalesce(joint_no,'') AS joint, coalesce(joint_size,0) AS size,
+                  coalesce(fitup_by,'') AS fitup_by, coalesce(welding_by,'') AS welding_by,
+                  coalesce(welder_no,'') AS welder_no
+             FROM spools
+            WHERE shop_field='S'
+              AND (substr(fitup_date,1,10) = :d OR substr(welding_date,1,10) = :d)
+            ORDER BY wo, iso, page, spool, joint""",
+        {"d": s}, ttl=30)
+    rows = []
+    for r in jdf.itertuples(index=False):
+        base = {"WO no": r.wo, "ISO DWG NO": r.iso, "Page": r.page, "Spool": r.spool,
+                "Joint": r.joint, "Size (dia-inch)": float(r.size)}
+        if r.is_fu:
+            rows.append({"Activity": "Fit-up", **base, "By": r.fitup_by, "Welder no": ""})
+        if r.is_wd:
+            rows.append({"Activity": "Welding", **base, "By": r.welding_by,
+                         "Welder no": r.welder_no})
+    worked = pd.DataFrame(rows, columns=["Activity", "WO no", "ISO DWG NO", "Page", "Spool",
+                                         "Joint", "Size (dia-inch)", "By", "Welder no"])
+    n_fu = int((worked["Activity"] == "Fit-up").sum())
+    n_wd = int((worked["Activity"] == "Welding").sum())
+    st.subheader("Joints worked")
+    t1, t2 = st.tabs([f"Fit-up ({n_fu})", f"Welding ({n_wd})"])
+    for tab, act in ((t1, "Fit-up"), (t2, "Welding")):
+        with tab:
+            part = worked[worked["Activity"] == act].drop(columns=["Activity"])
+            if act == "Fit-up":
+                part = part.drop(columns=["Welder no"])
+            if part.empty:
+                st.caption(f"No {act.lower()} recorded on this day.")
+            else:
+                show_table(part, f"daily_{act.lower()}", money=("Size (dia-inch)",))
+
+    # ---- by work order / batch / area -------------------------------------
+    st.subheader("Activity by group")
+    wo_df = _period_group(s, s, "wo_no", "WO no")
+    batch_df = _period_group(s, s, "batch_no", "Batch no")
+    area_df = _period_group(s, s, "area", "Area")
+    g1, g2, g3 = st.tabs(["By work order", "By batch", "By area"])
+    for tab, df_g in ((g1, wo_df), (g2, batch_df), (g3, area_df)):
+        with tab:
+            if df_g.empty:
+                st.caption("No activity on this day.")
+            else:
+                st.dataframe(df_g, use_container_width=True, hide_index=True,
+                             column_config=num2_cfg(df_g))
+
+    # ---- areas of concern --------------------------------------------------
+    st.subheader("Areas of concern")
+    concern_df = db.query(
+        """SELECT date AS "Date", category AS "Category", note AS "Concern",
+                  coalesce(raised_by,'') AS "Raised by"
+             FROM daily_concerns WHERE date = :d ORDER BY category""",
+        {"d": s}, ttl=30)
+    if concern_df.empty:
+        st.caption("No concerns logged for this day — they're logged on **Manpower**.")
+    else:
+        st.dataframe(concern_df, use_container_width=True, hide_index=True)
+
+    st.divider()
+    _vs = lambda now, before, dp=2: f"{now - before:+,.{dp}f}"
+    key_rows = [
+        ("Day", label),
+        ("Compared with", f"{prev:%A %d %b %Y}"),
+        ("Fit-up (dia-inch)", f"{kf['fitup_di']:,.2f}"),
+        ("  vs previous working day", _vs(kf["fitup_di"], pf["fitup_di"])),
+        ("Welding (dia-inch)", f"{kf['welding_di']:,.2f}"),
+        ("  vs previous working day", _vs(kf["welding_di"], pf["welding_di"])),
+        ("Joints fitted", f"{n_fu:,}"),
+        ("Joints welded", f"{n_wd:,}"),
+        ("Spools completed", f"{int(kf['spools_done']):,}"),
+        ("IRN'd (joints)", f"{int(kf['irn_joints']):,}"),
+        ("Delivered to painting (dia-inch)", f"{kf['paint_di']:,.2f}"),
+        ("Delivered to site (dia-inch)", f"{kf['site_di']:,.2f}"),
+        ("Fitters", f"{int(kf['fitter_days']):,}"),
+        ("Welders", f"{int(kf['welder_days']):,}"),
+        ("Concerns logged", f"{len(concern_df):,}"),
+        ("Cumulative fit-up (dia-inch)", f"{ptd['fitup_di']:,.2f}"),
+        ("Cumulative welding (dia-inch)", f"{ptd['welding_di']:,.2f}"),
+        ("Balance welding (dia-inch)", f"{tot_di - ptd['welding_di']:,.2f}"),
+    ]
+    if plan_row is not None:
+        for _, r0 in plan_row.iterrows():
+            key_rows += [(f"{r0['Metric']} daily target (dia-inch)",
+                          f"{r0['Daily target (dia-inch)']:,.2f}"),
+                         (f"{r0['Metric']} status", str(r0["Status"]))]
+    st.download_button(
+        "⬇ Daily report (.xlsx)",
+        data=reports.build_weekly_report_xlsx(label, key_rows, worked, wo_df, batch_df,
+                                              area_df, concern_df, title="DAILY REPORT",
+                                              daily_sheet="Joints worked"),
+        file_name=f"daily_report_{s}_{reports.stamp()}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary",
+    )
 
 
 def page_weekly() -> None:
@@ -5061,6 +5306,7 @@ _PAGE_FUNCS = {
     "Overview": page_overview,
     "Targets & plan": page_targets,
     "Work order summary": page_wo_summary,
+    "Daily report": page_daily,
     "Weekly report": page_weekly,
     "Monthly report": page_monthly,
     "Update progress": page_update,
@@ -5080,7 +5326,7 @@ _PAGE_FUNCS = {
 # display groups, in order; every page in PAGE_PERMS sits in exactly one
 _NAV_GROUPS = {
     "Dashboards": ["Overview", "Targets & plan", "Work order summary",
-                   "Weekly report", "Monthly report"],
+                   "Daily report", "Weekly report", "Monthly report"],
     "Shop floor": ["Update progress", "QC update", "Scan & update",
                    "Field workers", "QR labels"],
     "Records":    ["Delivery", "Classified report & master database", "QC WCS",
@@ -5092,6 +5338,7 @@ _NAV_ICONS = {
     "Overview": ":material/space_dashboard:",
     "Targets & plan": ":material/flag:",
     "Work order summary": ":material/assignment:",
+    "Daily report": ":material/today:",
     "Weekly report": ":material/date_range:",
     "Monthly report": ":material/calendar_month:",
     "Update progress": ":material/edit_note:",

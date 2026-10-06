@@ -390,11 +390,23 @@ def _write_report_sheet(wb, sheet: str, title: str, subtitle: str, dfr: pd.DataF
             ws.cell(r, 1).fill = PatternFill("solid", start_color=code)
         r += 1
 
+    # TOTAL only adds up numeric columns: summing text (Category, Concern,
+    # WO no...) wrote =SUM() over strings, which shows as a row of zeros.
+    # A table with nothing numeric (e.g. Areas of concern) gets no TOTAL row.
+    numeric = {h for h in headers[1:] if pd.api.types.is_numeric_dtype(dfr[h])}
+    if not numeric:
+        for j, h in enumerate(headers, 1):
+            ws.column_dimensions[ws.cell(HR, j).column_letter].width =                 max(len(str(h)) + 4, 22 if j == 1 else 13)
+        ws.freeze_panes = f"A{HR + 1}"
+        return
     ws.cell(r, 1, "TOTAL").font = Font(bold=True)
     ws.cell(r, 1).border = box
     for j, h in enumerate(headers[1:], 2):
         col = ws.cell(HR, j).column_letter
         cell = ws.cell(r, j)
+        if h not in numeric:
+            cell.border = box
+            continue
         if h.startswith("%"):
             cell.value = 100.0
             cell.number_format = '0.0"%"'
@@ -424,6 +436,7 @@ def build_weekly_report_xlsx(
     concerns: pd.DataFrame | None = None,
     *,
     title: str = "WEEKLY REPORT",
+    daily_sheet: str = "Daily",
 ) -> bytes:
     """Weekly/Monthly report workbook: Key figures + Daily + By work
     order/batch/area + Areas of concern. title distinguishes the two on
@@ -447,7 +460,7 @@ def build_weekly_report_xlsx(
     ws.column_dimensions["B"].width = 22
 
     idx = 1
-    for sheet, dfr in (("Daily", daily), ("By work order", wo),
+    for sheet, dfr in ((daily_sheet, daily), ("By work order", wo),
                        ("By batch", batch), ("By area", area),
                        ("Areas of concern", concerns)):
         if dfr is not None and not dfr.empty:
