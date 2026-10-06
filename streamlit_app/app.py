@@ -229,6 +229,10 @@ section[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"]{
   padding:.3rem .6rem;border-left:3px solid transparent;transition:background .12s ease}
 section[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"]:hover{background:var(--pillhov)!important}
 section[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"] p{color:var(--text)!important;font-weight:500}
+/* long page names wrap onto a second line rather than being cut off */
+section[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"] [data-testid="stMarkdownContainer"],
+section[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"] p{
+  white-space:normal!important;text-overflow:clip!important}
 section[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"] [data-testid="stIconMaterial"]{color:var(--muted)!important}
 section[data-testid="stSidebar"] .st-key-tp_nav_on a[data-testid="stPageLink-NavLink"]{
   background:var(--pillact)!important;border-left-color:var(--accent)}
@@ -328,6 +332,14 @@ h1,h2,h3,h4{color:@ink@!important}
    when the in-app toggle flipped the page but not Streamlit's theme. */
 [data-testid="stDataFrame"] [data-testid="StyledDataFrameDataCell"],
 [data-testid="stStyledTable"] td,[data-testid="stTable"] td{color:@text@!important}
+/* plain (secondary) buttons follow the in-app theme as well - on Streamlit's
+   own light theme they stayed white with pale text on the dark page */
+[data-testid="stMain"] .stButton>button[kind="secondary"],
+[data-testid="stMain"] .stDownloadButton>button[kind="secondary"],
+[data-testid="stMain"] button[data-testid="stBaseButton-secondary"]{
+  background:@panel@!important;color:@text@!important;border:1px solid @line@!important}
+[data-testid="stMain"] button[kind="secondary"] *,
+[data-testid="stMain"] button[data-testid="stBaseButton-secondary"] *{color:@text@!important}
 """
 
 
@@ -595,7 +607,7 @@ kiosk_auth()          # QR with &k=<token> signs in silently, before the gate
 _PAGE_NAMES = [
     "Overview", "Targets & plan", "Work order summary", "Weekly report",
     "Monthly report", "Update progress", "QC update", "Scan & update",
-    "Field workers", "QR labels", "Delivery", "Spools", "Classify & export",
+    "Field workers", "QR labels", "Delivery", "Spools", "Classified report & master database",
     "QC WCS", "Inventory", "Manpower", "Activity", "Data admin", "Users",
 ]
 
@@ -642,7 +654,7 @@ PAGE_PERMS = {
     "QR labels": [ADMIN],
     "Delivery": ["Painting Delivery", "Site Delivery"],
     "Spools": [],
-    "Classify & export": ["Generate Reports"],
+    "Classified report & master database": ["Generate Reports"],
     "QC WCS": [],
     "Inventory": ["Inventory"],
     "Manpower": ["Manpower Report"],
@@ -792,7 +804,7 @@ sp_issued AS (
     -- go unseen and wrongly count the spool as still "ready". delivered/
     -- to_paint match classify() exactly (any non-blank date, no ISO-format
     -- or as-of gating) rather than sp's asof-aware version, so this figure
-    -- always agrees with Classify & export regardless of the As of date
+    -- always agrees with Classified report & master database regardless of the As of date
     -- picker or a non-ISO date value.
     SELECT bool_or(coalesce(trim(site_delivery_date), '') <> '')          AS delivered,
            bool_or(coalesce(trim(delivery_date), '') <> '')               AS to_paint,
@@ -2487,7 +2499,7 @@ def page_wo_summary() -> None:
     cum_fu, cum_wd = float(p["cum_fitup"]), float(p["cum_weld"])
     insp = lambda n, of: (f"{n:,.2f} of {of:,.2f} ({n / of * 100:.0f}%)" if of
                           else f"{n:,.2f}")
-    # spool statuses from the same classification as Classify & export. The
+    # spool statuses from the same classification as the Classified report. The
     # old 5-bucket tally lumped fully-welded "awaiting IRN" and "ready to
     # release" spools into Under fabrication (469 there vs 98 here).
     ss = reports.summarize(reports.classify(_all_spools()))
@@ -4066,23 +4078,52 @@ def _classify_payload():
         reports.build_classified_xlsx(df),
         reports.build_master_xlsx(df),
         int(len(df)),
+        datetime.now(MYT),
     )
 
 
 def page_reports() -> None:
-    st.header("Classify & export")
+    st.header("Classified report & master database")
     _ensure_spool_type(db._conn_name())
-    summary, preview, x_classified, x_master, nrows = _classify_payload()
+    summary, preview, x_classified, x_master, nrows, built = _classify_payload()
+    n_spools = int(summary["Pipe Spools"].sum()) if not summary.empty else 0
 
-    top = st.columns([4, 1])
-    top[0].caption(f"{nrows:,} spools · ported from classify_spools.py / export_master.py "
-                   "· results cached ~10 min")
-    if top[1].button("↻ Rebuild", use_container_width=True):
+    top = st.columns([4, 1], vertical_alignment="center")
+    top[0].caption(f"**{n_spools:,}** pipe spools · **{nrows:,}** joint rows · built "
+                   f"{built:%d %b %Y, %H:%M} MYT — refreshes every 10 min, or "
+                   "rebuild now for the latest updates.")
+    if top[1].button("Rebuild", icon=":material/refresh:", use_container_width=True):
         _classify_payload.clear()
         st.rerun()
 
+    # downloads first: they're what this page is for
+    ts = reports.stamp()
+    _XL = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    c1, c2 = st.columns(2)
+    for col, title, desc, data, fname in (
+        (c1, ":material/summarize: Classified report",
+         "Spool status per pipe spool, ready to send: **Summary**, **Shop and Field**, "
+         "**Under Fabrication Summary**, **All Spools**, **Pipe Spool Summary** and "
+         "one sheet per status.",
+         x_classified, f"classified_spools_{ts}.xlsx"),
+        (c2, ":material/database: Master database",
+         "Every joint in the database with report headers, in the desktop app's "
+         "column order — for backup, re-import or sharing the full data.",
+         x_master, f"spool_tracking_{ts}.xlsx"),
+    ):
+        # button straight under the title, so both line up whatever the
+        # length of the description beneath
+        with col.container(border=True):
+            st.markdown(f"#### {title}")
+            st.download_button("Download .xlsx", data=data, file_name=fname, mime=_XL,
+                               icon=":material/download:", type="primary",
+                               use_container_width=True)
+            st.markdown(desc)
+            st.caption(f"`{fname}`")
+
     st.subheader("Spool status summary")
-    st.dataframe(
+    t_, c_ = st.columns([3, 2])
+    t_.dataframe(
         summary, use_container_width=True, hide_index=True,
         column_config={
             "Dia-Inch": st.column_config.NumberColumn(format="%.2f"),
@@ -4090,29 +4131,10 @@ def page_reports() -> None:
             "% Dia-Inch": st.column_config.NumberColumn(format="%.1f%%"),
         },
     )
-    st.bar_chart(summary.set_index("Spool Status")["Pipe Spools"])
-
-    ts = reports.stamp()
-    _XL = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    c1, c2 = st.columns(2)
-    with c1:
-        st.download_button(
-            "⬇  Download classified spools (.xlsx)", data=x_classified,
-            file_name=f"classified_spools_{ts}.xlsx", mime=_XL,
-            type="primary", use_container_width=True,
-        )
-        st.caption("Summary + All Spools + Pipe Spool Summary + one sheet per status.")
-    with c2:
-        st.download_button(
-            "⬇  Download master export (.xlsx)", data=x_master,
-            file_name=f"spool_tracking_{ts}.xlsx", mime=_XL,
-            type="primary", use_container_width=True,
-        )
-        st.caption("Full spools table with report headers, desktop column order.")
+    c_.bar_chart(summary.set_index("Spool Status")["Pipe Spools"], height=260)
 
     with st.expander("Preview: classified rows"):
         st.dataframe(preview, use_container_width=True, hide_index=True)
-
 
 _WCS_DDL = """
 CREATE TABLE IF NOT EXISTS qc_wcs_docs (
@@ -4582,7 +4604,7 @@ GATED_TABS = {
     "Delivery": {"Painting delivery": "Painting Delivery",
                  "Site delivery": "Site Delivery"},
     "Manpower": {"Manpower entry": "Manpower Report"},
-    "Classify & export": {"Classify & export": "Generate Reports"},
+    "Classified report & master database": {"Classified report & master database": "Generate Reports"},
     "QC WCS": {"QC WCS uploads": "QC WCS"},
     "Inventory": {"Inventory": "Inventory"},
 }
@@ -5102,7 +5124,7 @@ _PAGE_FUNCS = {
     "QR labels": page_qr_labels,
     "Delivery": page_delivery,
     "Spools": page_spools,
-    "Classify & export": page_reports,
+    "Classified report & master database": page_reports,
     "QC WCS": page_qc_wcs,
     "Inventory": page_inventory,
     "Manpower": page_manpower,
@@ -5116,7 +5138,7 @@ _NAV_GROUPS = {
                    "Weekly report", "Monthly report"],
     "Shop floor": ["Update progress", "QC update", "Scan & update",
                    "Field workers", "QR labels"],
-    "Records":    ["Delivery", "Spools", "Classify & export", "QC WCS",
+    "Records":    ["Delivery", "Spools", "Classified report & master database", "QC WCS",
                    "Inventory", "Manpower"],
     "Admin":      ["Activity", "Data admin", "Users"],
 }
@@ -5134,7 +5156,7 @@ _NAV_ICONS = {
     "QR labels": ":material/qr_code_2:",
     "Delivery": ":material/local_shipping:",
     "Spools": ":material/view_list:",
-    "Classify & export": ":material/category:",
+    "Classified report & master database": ":material/summarize:",
     "QC WCS": ":material/verified:",
     "Inventory": ":material/inventory_2:",
     "Manpower": ":material/groups:",
