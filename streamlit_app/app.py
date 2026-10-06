@@ -607,7 +607,7 @@ kiosk_auth()          # QR with &k=<token> signs in silently, before the gate
 _PAGE_NAMES = [
     "Overview", "Targets & plan", "Work order summary", "Weekly report",
     "Monthly report", "Update progress", "QC update", "Scan & update",
-    "Field workers", "QR labels", "Delivery", "Spools", "Classified report & master database",
+    "Field workers", "QR labels", "Delivery", "Classified report & master database",
     "QC WCS", "Inventory", "Manpower", "Activity", "Data admin", "Users",
 ]
 
@@ -653,7 +653,6 @@ PAGE_PERMS = {
     "Field workers": [ADMIN],
     "QR labels": [ADMIN],
     "Delivery": ["Painting Delivery", "Site Delivery"],
-    "Spools": [],
     "Classified report & master database": ["Generate Reports"],
     "QC WCS": [],
     "Inventory": ["Inventory"],
@@ -4007,59 +4006,6 @@ def _distinct(col: str) -> list:
         f"ORDER BY 1", ttl=120)[col].tolist()]
 
 
-def page_spools() -> None:
-    st.header("Spools")
-    _ensure_spool_type(db._conn_name())
-    q = st.text_input("🔎 Search (WO / ISO / spool / joint / test pack / line)",
-                      placeholder="type any part…")
-    fcol = st.columns(5)
-    area = fcol[0].multiselect("Area", _distinct("area"))
-    batch = fcol[1].multiselect("Batch no", _distinct("batch_no"))
-    shop = fcol[2].selectbox("Shop/Field", ["", "S", "F"])
-    status = fcol[3].selectbox("Status", ["", "issued", "os", "hold"])
-    spool_type = fcol[4].selectbox("Spool type", ["", "Straight Pipe", "Fabricated Spool"])
-    g1, g2 = st.columns(2)
-    only_fit = g1.checkbox("Fitted only")
-    only_weld = g2.checkbox("Welded only")
-
-    where, params = [], {}
-    if q.strip():
-        where.append("(wo_no ILIKE :q OR iso_dwg_no ILIKE :q OR dwg_spool_no ILIKE :q "
-                     "OR joint_no ILIKE :q OR test_pack_no ILIKE :q OR line_no ILIKE :q)")
-        params["q"] = f"%{q.strip()}%"
-    if area:
-        where.append("area = ANY(:area)"); params["area"] = area
-    if batch:
-        where.append("batch_no = ANY(:batch)"); params["batch"] = batch
-    if shop:
-        where.append("shop_field = :shop"); params["shop"] = shop
-    if status:
-        where.append("status = :status"); params["status"] = status
-    if spool_type:
-        where.append("spool_type = :spool_type"); params["spool_type"] = spool_type
-    if only_fit:
-        where.append("coalesce(trim(fitup_date),'')<>''")
-    if only_weld:
-        where.append("coalesce(trim(welding_date),'')<>''")
-    clause = ("WHERE " + " AND ".join(where)) if where else ""
-
-    n = db.query(f"SELECT count(*) c FROM spools {clause}", params).iloc[0]["c"]
-    st.caption(f"{n:,} rows match — showing up to 2000")
-    df = db.query(
-        f"""
-        SELECT id, wo_no, batch_no, iso_dwg_no, dwg_spool_no, joint_no, joint_size,
-               area, system_no, test_pack_no, shop_field, status, spool_type,
-               fitup_date, welding_date, paint_status, painting_date, delivery_date,
-               site_delivery_date, workable
-        FROM spools {clause}
-        ORDER BY iso_dwg_no, dwg_spool_no, joint_no
-        LIMIT 2000
-        """,
-        params,
-    )
-    show_table(df, "spools", money=("joint_size",))
-
-
 @st.cache_data(ttl=30)
 def _all_spools() -> pd.DataFrame:
     return db.query("SELECT * FROM spools", ttl=30)
@@ -5123,7 +5069,6 @@ _PAGE_FUNCS = {
     "Field workers": page_field_workers,
     "QR labels": page_qr_labels,
     "Delivery": page_delivery,
-    "Spools": page_spools,
     "Classified report & master database": page_reports,
     "QC WCS": page_qc_wcs,
     "Inventory": page_inventory,
@@ -5138,7 +5083,7 @@ _NAV_GROUPS = {
                    "Weekly report", "Monthly report"],
     "Shop floor": ["Update progress", "QC update", "Scan & update",
                    "Field workers", "QR labels"],
-    "Records":    ["Delivery", "Spools", "Classified report & master database", "QC WCS",
+    "Records":    ["Delivery", "Classified report & master database", "QC WCS",
                    "Inventory", "Manpower"],
     "Admin":      ["Activity", "Data admin", "Users"],
 }
@@ -5155,7 +5100,6 @@ _NAV_ICONS = {
     "Field workers": ":material/engineering:",
     "QR labels": ":material/qr_code_2:",
     "Delivery": ":material/local_shipping:",
-    "Spools": ":material/view_list:",
     "Classified report & master database": ":material/summarize:",
     "QC WCS": ":material/verified:",
     "Inventory": ":material/inventory_2:",
