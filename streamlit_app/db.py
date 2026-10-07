@@ -126,6 +126,7 @@ def get_settings() -> dict:
 def set_settings(values: dict) -> None:
     with _conn().session as s:
         s.execute(text(_SETTINGS_DDL))
+        s.execute(text("ALTER TABLE project_settings ENABLE ROW LEVEL SECURITY"))
         for k, v in values.items():
             s.execute(
                 text("""INSERT INTO project_settings (key, value) VALUES (:k, :v)

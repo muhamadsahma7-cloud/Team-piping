@@ -16,6 +16,9 @@
 create or replace function public.set_updated_at()
 returns trigger
 language plpgsql
+-- pinned search_path (Supabase linter 0011); now() lives in pg_catalog,
+-- which is always searched, so an empty path is safe here
+set search_path = ''
 as $$
 begin
   new.updated_at = now();

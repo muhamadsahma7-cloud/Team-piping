@@ -3362,6 +3362,8 @@ def _ensure_qr_schema(conn_name: str) -> bool:
              worker_id bigint, worker_name text, stamp_no text,
              source text not null default 'qr', app_user text,
              recorded_at timestamptz not null default now())""",
+        "ALTER TABLE public.field_workers ENABLE ROW LEVEL SECURITY",
+        "ALTER TABLE public.field_updates ENABLE ROW LEVEL SECURITY",
         "ALTER TABLE public.field_updates ADD COLUMN IF NOT EXISTS qr_id text",
         "ALTER TABLE public.field_updates ADD COLUMN IF NOT EXISTS joint_no text",
         # QC sign-off added two activities; the original CHECK only allowed
@@ -3374,6 +3376,49 @@ def _ensure_qr_schema(conn_name: str) -> bool:
         "DROP INDEX IF EXISTS public.uq_field_updates_joint_activity",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_field_updates_joint_activity "
         "ON public.field_updates (qr_id, joint_no, activity) WHERE qr_id IS NOT NULL",
+    ]
+    for s in stmts:
+        try:
+            db.execute(s)
+        except Exception:
+            pass
+    return True
+
+
+@st.cache_resource
+def _ensure_security(conn_name: str) -> bool:
+    """Close Supabase Security Advisor findings, once per connected project.
+
+    Supabase exposes every table in `public` through its REST API, where the
+    publishable anon key can read and write any table that has Row Level
+    Security off. Tables made by schema.sql have it on, but the ones this app
+    creates while running (spools snapshots, daily_concerns, project_settings,
+    qc_wcs_docs) didn't - flagged "RLS Disabled in Public" (ERROR). So: switch
+    RLS on for every public table that lacks it. No policies are added, so the
+    API gets nothing; the app is unaffected because it connects as `postgres`,
+    which bypasses RLS. Also pins set_updated_at()'s search_path ("Function
+    Search Path Mutable"); now() is in pg_catalog, found even with ''.
+    Built with quote_ident, not format('%I'): db.execute passes a params
+    dict, so psycopg2 would read a '%' as a placeholder."""
+    stmts = [
+        """DO $$
+           DECLARE r record;
+           BEGIN
+             FOR r IN SELECT c.relname
+                        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                       WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+                         AND NOT c.relrowsecurity
+             LOOP
+               EXECUTE 'ALTER TABLE public.' || quote_ident(r.relname)
+                    || ' ENABLE ROW LEVEL SECURITY';
+             END LOOP;
+           END $$""",
+        """DO $$
+           BEGIN
+             IF to_regprocedure('public.set_updated_at()') IS NOT NULL THEN
+               ALTER FUNCTION public.set_updated_at() SET search_path = '';
+             END IF;
+           END $$""",
     ]
     for s in stmts:
         try:
@@ -4357,6 +4402,7 @@ def page_qc_wcs() -> None:
     from sqlalchemy import text as _t
     with db.engine().begin() as cx:
         cx.execute(_t(_WCS_DDL))
+        cx.execute(_t("ALTER TABLE qc_wcs_docs ENABLE ROW LEVEL SECURITY"))
 
     if can_upload:
         with st.form("wcs_upload", clear_on_submit=True):
@@ -4510,6 +4556,7 @@ def _ensure_daily_concerns(conn_name: str) -> bool:
              date text not null, category text not null, note text not null,
              raised_by text, created_at timestamptz not null default now())""",
         "CREATE INDEX IF NOT EXISTS idx_daily_concerns_date ON public.daily_concerns (date)",
+        "ALTER TABLE public.daily_concerns ENABLE ROW LEVEL SECURITY",
     ]
     for s in stmts:
         try:
@@ -5024,6 +5071,8 @@ def page_admin() -> None:
             name = _SNAP_PREFIX + pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
             with eng.begin() as cx:
                 cx.execute(_t(f'CREATE TABLE public."{name}" AS SELECT * FROM public.spools'))
+                # a full copy of spools - keep it off the public REST API
+                cx.execute(_t(f'ALTER TABLE public."{name}" ENABLE ROW LEVEL SECURITY'))
             st.success(f"Created snapshot table `{name}`.")
     with c2:
         tables = {
@@ -5147,6 +5196,7 @@ def page_admin() -> None:
                 if auto_snap:
                     sname = _SNAP_PREFIX + pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
                     cx.execute(_t(f'CREATE TABLE public."{sname}" AS SELECT * FROM public.spools'))
+                    cx.execute(_t(f'ALTER TABLE public."{sname}" ENABLE ROW LEVEL SECURITY'))
                 _kk = ("iso_dwg_no", "line_no", "iso_run_no", "dwg_spool_no")
                 _jk = _kk + ("joint_no",)
                 if has_qr:
@@ -5368,6 +5418,9 @@ _pages = {
                default=(n == _visible[0]))
     for n in _visible
 }
+# RLS on every public table, once per project (defined mid-file, so it's
+# called here, after every function exists - not up by the login gate)
+_ensure_security(db._conn_name())
 pg = st.navigation(list(_pages.values()), position="hidden")
 
 # A scanned spool QR (?scan=<code>, stashed into pending_scan up top so it
