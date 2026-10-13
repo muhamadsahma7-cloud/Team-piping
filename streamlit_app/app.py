@@ -121,7 +121,10 @@ def donut(done: float, total: float, color: str = "#22c55e"):
                 tooltip=[alt.Tooltip("cat:N", title=""),
                          alt.Tooltip("val:Q", title="dia-inch", format=",.1f")])
     )
-    text = (alt.Chart(pd.DataFrame({"t": [f"{pct:.0f}%"]}))
+    # one decimal, matching the progress bars underneath; never "100.0%"
+    # while a balance is left (99.96 would round up)
+    shown = min(pct, 99.9) if done < total else pct
+    text = (alt.Chart(pd.DataFrame({"t": [f"{shown:.1f}%"]}))
             .mark_text(size=22, fontWeight="bold",
                        color="#e2e8f0" if d else "#1f2933").encode(text="t:N"))
     return (arc + text).properties(height=180)
