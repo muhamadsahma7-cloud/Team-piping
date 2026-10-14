@@ -4670,10 +4670,17 @@ def _material_import_ui(*, table: str, template_fn, parse_fn, upsert_fn,
                      disabled=not confirm or clean.empty, key=f"{upload_key}_replace"):
             eng = db.engine()
             from sqlalchemy import text as _t
-            with eng.begin() as cx:
-                cx.execute(_t(f"TRUNCATE public.{table} RESTART IDENTITY"))
-                clean.to_sql(table, cx, if_exists="append", index=False,
-                            chunksize=500, method="multi")
+            try:
+                with eng.begin() as cx:
+                    _empty_table(cx, table)
+                    clean.to_sql(table, cx, if_exists="append", index=False,
+                                chunksize=500, method="multi")
+            except Exception as exc:          # whole transaction rolled back
+                st.error(_BUSY_MSG.replace("spools", table)
+                         if "lock" in str(exc).lower() or "cancel" in str(exc).lower()
+                         else "Replace failed — **nothing was changed.** "
+                              f"({type(exc).__name__})")
+                return
             try:
                 db.execute(
                     "INSERT INTO user_log (username) VALUES (:u)",
@@ -5052,6 +5059,36 @@ def page_activity() -> None:
 _SNAP_PREFIX = "backup_spools_"
 
 
+def _empty_table(cx, table: str = "spools") -> None:
+    """Empty a table inside the caller's transaction (spools Excel import and
+    snapshot restore, BOM / Inventory replace).
+    `table` is always one of our own table names, never user input.
+
+    DELETE, not TRUNCATE. TRUNCATE needs the table to itself, so it queued
+    behind anyone merely reading spools (another user on Overview, a report
+    building) and Supabase's 2-minute statement_timeout cancelled it -
+    "QueryCanceled" on Replace spools. DELETE doesn't wait for readers: they
+    keep seeing the old rows until this transaction commits, then the new
+    ones. No foreign keys point at spools, so the result is the same.
+    lock_timeout caps any remaining wait (a writer holding a row) at 20 s
+    instead of 2 min; the caller turns that into a "nothing changed" message.
+
+    The id numbering is deliberately NOT restarted (TRUNCATE's RESTART
+    IDENTITY did). Unlike that, setval() and ALTER SEQUENCE ... RESTART are
+    not undone when the transaction rolls back - tested - so an import that
+    failed after the reset would bring the old rows back with the counter at
+    1, and the next insert would collide with an existing id. Nothing relies
+    on ids starting at 1 (field_updates.spool_id is a soft link), so new rows
+    just continue the numbering."""
+    from sqlalchemy import text as _t
+    cx.execute(_t("SET LOCAL lock_timeout = '20s'"))
+    cx.execute(_t(f"DELETE FROM public.{table}"))
+
+
+_BUSY_MSG = ("Couldn't replace the spools table — it was busy (someone was saving "
+             "to it at the same moment). **Nothing was changed.** Try again in a minute.")
+
+
 def page_admin() -> None:
     st.header("Data admin")
     if st.session_state.get("permission") != "all":
@@ -5109,14 +5146,20 @@ def page_admin() -> None:
                    ORDER BY ordinal_position""", ttl=0,
             )["column_name"].tolist()
             collist = ", ".join(f'"{c}"' for c in cols)
-            with eng.begin() as cx:
-                cx.execute(_t("TRUNCATE public.spools RESTART IDENTITY"))
-                cx.execute(_t(
-                    f'INSERT INTO public.spools ({collist}) '
-                    f'SELECT {collist} FROM public."{pick}"'
-                ))
-            st.cache_data.clear()
-            st.success(f"Restored {n:,} rows from `{pick}`.")
+            try:
+                with eng.begin() as cx:
+                    _empty_table(cx)
+                    cx.execute(_t(
+                        f'INSERT INTO public.spools ({collist}) '
+                        f'SELECT {collist} FROM public."{pick}"'
+                    ))
+            except Exception as exc:          # whole transaction rolled back
+                st.error(_BUSY_MSG if "lock" in str(exc).lower() or "cancel" in str(exc).lower()
+                         else "Restore failed — **nothing was changed.** "
+                              f"({type(exc).__name__})")
+            else:
+                st.cache_data.clear()
+                st.success(f"Restored {n:,} rows from `{pick}`.")
         if cc2.button(f"🗑 Drop `{pick}`"):
             with eng.begin() as cx:
                 cx.execute(_t(f'DROP TABLE public."{pick}"'))
@@ -5195,7 +5238,8 @@ def page_admin() -> None:
                 "AND table_name='spools' AND column_name='qr_id'", ttl=0,
             ).empty
             relinked = names_kept = 0
-            with eng.begin() as cx:
+            try:
+              with eng.begin() as cx:
                 if auto_snap:
                     sname = _SNAP_PREFIX + pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
                     cx.execute(_t(f'CREATE TABLE public."{sname}" AS SELECT * FROM public.spools'))
@@ -5216,7 +5260,7 @@ def page_admin() -> None:
                         "FROM public.spools "
                         "WHERE coalesce(fitup_by,'')<>'' OR coalesce(welding_by,'')<>''"
                     ))
-                cx.execute(_t("TRUNCATE public.spools RESTART IDENTITY"))
+                _empty_table(cx)
                 clean.to_sql("spools", cx, if_exists="append", index=False,
                              chunksize=1000, method="multi")
                 if has_qr:
@@ -5233,6 +5277,11 @@ def page_admin() -> None:
                         "SET fitup_by = k.fitup_by, welding_by = k.welding_by "
                         f"FROM _by_keep k WHERE {_mj}"
                     )).rowcount
+            except Exception as exc:          # whole transaction rolled back
+                st.error(_BUSY_MSG if "lock" in str(exc).lower() or "cancel" in str(exc).lower()
+                         else "Import failed — **nothing was changed.** "
+                              f"({type(exc).__name__})")
+                return
             try:
                 db.execute("INSERT INTO user_log (username) VALUES (:u)",
                            {"u": f"{st.session_state['user']} [excel import {len(clean)} rows]"})
